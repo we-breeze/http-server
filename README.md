@@ -1,92 +1,196 @@
-# http-server
+# Breeze HTTP Server
 
+`http-server` is a bounded HTTP/1.1 runtime for internal Breeze services. It
+is intentionally separate from the `http` client crate: the two directions
+have different connection ownership, lifecycle, and observability needs.
 
+## Data path
 
-## Getting started
+- Request line, headers, target, query, and a fixed-length body borrow the
+  connection receive buffer. The handler finishes before that buffer is reused.
+- Response bodies are written once into `EphemeralBytesArena` and held by an
+  `EphemeralBytes` allocation until the socket write completes.
+- The server writes the generated HTTP head and body with vectored writes; it
+  never concatenates or copies the arena-backed body into another framework
+  buffer.
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+The unavoidable kernel-to-user-space receive copy still exists. “Zero-copy”
+here means no additional framework copy for parsed request fields or an
+arena-backed response body.
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+## First-version scope
 
-## Add your files
+HTTP/1.1 with bounded, fixed `Content-Length` bodies and sequential request
+handling per connection. Pipelined requests are supported in wire order.
+Chunked request bodies, `Expect: 100-continue`, HTTP/2, streaming responses,
+and WebSockets are intentionally outside the initial contract.
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
+## API macros
 
+Enable the `macros` feature and define APIs in business terms. `Request` stays
+inside generated transport code.
+
+```toml
+[dependencies]
+http-server = { version = "0.1", features = ["macros"] }
+serde = { version = "1", features = ["derive"] }
 ```
-cd existing_repo
-git remote add origin https://git.intra.example.com/platform/breeze/http-server.git
-git branch -M master
-git push -uf origin master
+
+`prefix`, `consumes`, `produces`, and `auth` belong on the API and default to
+`""`, `json`, `json`, and `none`. Method options inherit API values and may
+override either codec or auth mode. `protobuf` is reserved for a later codec
+implementation.
+
+```rust,no_run
+use http_server::{ApiResult, api};
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize)]
+struct UpdateUser<'a> {
+    name: &'a str,
+}
+
+#[derive(Serialize)]
+struct UserView<'a> {
+    id: u64,
+    name: &'a str,
+}
+
+struct UserApi;
+
+#[api(prefix = "/v1/users")]
+impl UserApi {
+    #[http_server::get("/:id")]
+    async fn get(&self, id: u64, verbose: Option<bool>) -> UserView<'static> {
+        let _ = verbose;
+        UserView { id, name: "read" }
+    }
+
+    #[http_server::post("/:id", headers(trace_id = "x-trace-id"))]
+    async fn update<'a>(
+        &self,
+        id: u64,
+        verbose: Option<bool>,
+        input: UpdateUser<'a>,
+        trace_id: Option<&'a str>,
+    ) -> ApiResult<UserView<'a>> {
+        let _ = (verbose, trace_id);
+        Ok(UserView { id, name: input.name })
+    }
+}
 ```
 
-## Integrate with your tools
+The macro implements `Handler` with static route dispatch: there is no route
+map, boxed handler, or exposed transport request. A route's captures bind the
+first parameters in route order. Remaining scalar parameters come from query
+keys with the same name; one remaining non-scalar parameter is the JSON body.
+`Authenticated<T>` is an explicit exception: it is supplied by the
+authentication layer instead of body decoding.
+`headers(...)` is explicit because a plain `&str` cannot otherwise be
+distinguished from a query parameter. Invalid parameters return `400`; a JSON
+body route rejects non-JSON `Content-Type` with `415`; an otherwise matched
+path and wrong method returns `405` with `Allow`.
 
-- [ ] [Set up project integrations](https://git.intra.example.com/platform/breeze/http-server/-/settings/integrations)
+Business failures return `ApiResult<T>`. For example,
+`Err(ApiError::forbidden("not permitted"))` produces a JSON `403 Forbidden`
+response. Use `403` only after authentication identified the caller; missing
+or invalid authentication belongs to `401 Unauthorized`.
 
-## Collaborate with your team
+## Authentication
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
+Authentication is a typed API context, not a raw `Authorization` header in a
+business method. API auth defaults to `none`; use `required` at API scope and
+override an individual public route with `auth = none`. `auth = optional`
+injects an `Option<Authenticated<T>>`; it treats absent credentials as `None`
+but rejects malformed credentials with `401`.
 
-## Test and Deploy
+```rust,no_run
+use std::future::Future;
 
-Use the built-in continuous integration in GitLab.
+use http_server::{
+    AuthFailure, AuthRequest, Authenticated, Authenticator, api,
+};
+use serde::Serialize;
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing(SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+struct Actor {
+    user_id: u64,
+}
 
-***
+struct InternalAuth;
 
-# Editing this README
+impl Authenticator for InternalAuth {
+    type Principal = Actor;
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thank you to [makeareadme.com](https://www.makeareadme.com/) for this template.
+    fn authenticate<'a>(
+        &'a self,
+        request: AuthRequest<'a>,
+    ) -> impl Future<Output = Result<Actor, AuthFailure>> + Send + 'a {
+        async move {
+            let Some(value) = request.header("x-internal-token") else {
+                return Err(AuthFailure::missing_credentials("Internal"));
+            };
+            if value != b"trusted" {
+                return Err(AuthFailure::invalid_credentials("Internal"));
+            }
+            Ok(Actor { user_id: 42 })
+        }
+    }
+}
 
-## Suggestions for a good README
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+#[derive(Serialize)]
+struct UserView {
+    id: u64,
+}
 
-## Name
-Choose a self-explaining name for your project.
+#[derive(Serialize)]
+struct HealthView {
+    ok: bool,
+}
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+struct UserApi;
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+#[api(prefix = "/v1/users", auth = required)]
+impl UserApi {
+    #[http_server::get("/:id")]
+    async fn get(&self, id: u64, actor: Authenticated<Actor>) -> UserView {
+        let _caller = actor.principal().user_id;
+        UserView { id }
+    }
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+    #[http_server::get("/health", auth = none)]
+    async fn health(&self) -> HealthView {
+        HealthView { ok: true }
+    }
+}
+```
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+Start it with `Server::bind_with_authenticator(addr, UserApi, InternalAuth,
+config).await?`.
+
+`AuthRequest` exposes only method, path, headers, and peer address; the body
+remains unavailable to authentication. An authenticator must return an owned
+principal. A JWT implementation can use `type Principal = Jwt<User>`, yielding
+the familiar `Authenticated<Jwt<User>>` business parameter without coupling the
+core server to a particular JWT or crypto library.
+
+JSON response encoding counts the exact output size first, then writes directly
+into its final arena allocation. It adds no body copy, though it deliberately
+uses two serialization passes. A borrowed `Deserialize<'a>` DTO can borrow
+unescaped JSON strings from the receive buffer; decoding escaped strings or
+using owned DTO fields may allocate by codec design.
 
 ## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+The application chooses arena capacity at startup. Each `EphemeralBytesArena`
+contains two chunks and falls back to heap storage if both are live or a frame
+is larger than one chunk. Use the same cloned arena in dependent Breeze SDKs
+when their short-lived response/request frames should share the process-wide
+budget.
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+## Verification
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+```bash
+cargo test
+cargo test --features macros
+cargo clippy --all-targets --all-features -- -D warnings
+```

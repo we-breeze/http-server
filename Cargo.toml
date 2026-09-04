@@ -1,0 +1,37 @@
+[package]
+name = "http-server"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Zero-copy HTTP/1.1 server runtime for Breeze services"
+license = "Apache-2.0"
+
+[workspace]
+members = ["macros"]
+resolver = "3"
+
+[dependencies]
+brz-ds = { package = "ds", git = "https://github.com/we-breeze/ds.git", tag = "v0.0.1", version = "0.1.0", default-features = false }
+bytes = "1"
+httparse = "1"
+http-server-macros = { path = "macros", version = "0.1.0", optional = true }
+itoa = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+
+[features]
+default = []
+macros = ["dep:http-server-macros"]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
