@@ -15,6 +15,7 @@ pub struct Request<'a> {
     body: &'a [u8],
     peer_addr: SocketAddr,
     response_arena: &'a EphemeralBytesArena,
+    pub(crate) rejection_handler: crate::RejectionHandler,
 }
 
 impl<'a> Request<'a> {
@@ -33,6 +34,7 @@ impl<'a> Request<'a> {
             body,
             peer_addr,
             response_arena,
+            rejection_handler: crate::rejection::default_rejection,
         }
     }
 
@@ -105,6 +107,31 @@ impl<'a> Request<'a> {
     #[must_use]
     pub fn response_arena(&self) -> &EphemeralBytesArena {
         self.response_arena
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn reject(&self, error: crate::Rejection) -> crate::Response {
+        (self.rejection_handler)(error, self.response_arena)
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn reject_body(
+        &self,
+        error: &crate::BodyError,
+        parameter: &'static str,
+    ) -> crate::Response {
+        let kind = match error {
+            crate::BodyError::UnsupportedMediaType => crate::RejectionKind::ContentType,
+            crate::BodyError::Invalid(_) => crate::RejectionKind::Body,
+        };
+        self.reject(crate::Rejection::new(
+            kind,
+            parameter,
+            None,
+            error.to_string(),
+        ))
     }
 }
 

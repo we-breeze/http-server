@@ -2,79 +2,7 @@ use std::fmt;
 
 use crate::EphemeralBytes;
 
-/// HTTP response status code.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct StatusCode(u16);
-
-impl StatusCode {
-    pub const CONTINUE: Self = Self(100);
-    pub const OK: Self = Self(200);
-    pub const NO_CONTENT: Self = Self(204);
-    pub const BAD_REQUEST: Self = Self(400);
-    pub const UNAUTHORIZED: Self = Self(401);
-    pub const FORBIDDEN: Self = Self(403);
-    pub const NOT_FOUND: Self = Self(404);
-    pub const METHOD_NOT_ALLOWED: Self = Self(405);
-    pub const REQUEST_TIMEOUT: Self = Self(408);
-    pub const PAYLOAD_TOO_LARGE: Self = Self(413);
-    pub const EXPECTATION_FAILED: Self = Self(417);
-    pub const REQUEST_HEADER_FIELDS_TOO_LARGE: Self = Self(431);
-    pub const INTERNAL_SERVER_ERROR: Self = Self(500);
-    pub const SERVICE_UNAVAILABLE: Self = Self(503);
-    pub const NOT_IMPLEMENTED: Self = Self(501);
-    pub const HTTP_VERSION_NOT_SUPPORTED: Self = Self(505);
-
-    /// Creates a status code. Values outside the three-digit HTTP range are
-    /// rejected by [`Server`](crate::Server) as an internal server error.
-    #[must_use]
-    pub const fn new(value: u16) -> Self {
-        Self(value)
-    }
-
-    #[must_use]
-    pub const fn as_u16(self) -> u16 {
-        self.0
-    }
-
-    pub(crate) const fn reason(self) -> &'static str {
-        match self.0 {
-            100 => "Continue",
-            200 => "OK",
-            201 => "Created",
-            202 => "Accepted",
-            204 => "No Content",
-            400 => "Bad Request",
-            401 => "Unauthorized",
-            403 => "Forbidden",
-            404 => "Not Found",
-            405 => "Method Not Allowed",
-            408 => "Request Timeout",
-            409 => "Conflict",
-            413 => "Payload Too Large",
-            415 => "Unsupported Media Type",
-            417 => "Expectation Failed",
-            429 => "Too Many Requests",
-            431 => "Request Header Fields Too Large",
-            500 => "Internal Server Error",
-            501 => "Not Implemented",
-            502 => "Bad Gateway",
-            503 => "Service Unavailable",
-            504 => "Gateway Timeout",
-            505 => "HTTP Version Not Supported",
-            _ => "Unknown",
-        }
-    }
-
-    pub(crate) const fn is_valid(self) -> bool {
-        self.0 >= 100 && self.0 <= 599
-    }
-}
-
-impl fmt::Display for StatusCode {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(formatter)
-    }
-}
+pub use http::StatusCode;
 
 /// An HTTP response body that can be written without a framework body copy.
 #[derive(Debug)]
@@ -82,28 +10,29 @@ pub enum ResponseBody {
     Empty,
     Static(&'static [u8]),
     Arena(EphemeralBytes),
+    Owned(bytes::Bytes),
+    Stream(crate::stream::ResponseStream),
 }
 
 impl ResponseBody {
+    /// Known body length; `None` for a stream whose length is unknown.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub fn content_length(&self) -> Option<u64> {
         match self {
-            Self::Empty => 0,
-            Self::Static(bytes) => bytes.len(),
-            Self::Arena(bytes) => bytes.len(),
+            Self::Empty => Some(0),
+            Self::Static(bytes) => Some(bytes.len() as u64),
+            Self::Arena(bytes) => Some(bytes.len() as u64),
+            Self::Owned(bytes) => Some(bytes.len() as u64),
+            Self::Stream(stream) => stream.content_length,
         }
-    }
-
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     pub(crate) fn as_slice(&self) -> &[u8] {
         match self {
-            Self::Empty => &[],
+            Self::Empty | Self::Stream(_) => &[],
             Self::Static(bytes) => bytes,
             Self::Arena(bytes) => bytes.as_ref(),
+            Self::Owned(bytes) => bytes.as_ref(),
         }
     }
 }
@@ -172,6 +101,8 @@ pub struct Response {
     allow: Option<&'static str>,
     www_authenticate: Option<&'static str>,
     close: bool,
+    suppress_body: bool,
+    conversion_failed: bool,
 }
 
 impl Response {
@@ -185,12 +116,92 @@ impl Response {
             allow: None,
             www_authenticate: None,
             close: false,
+            suppress_body: false,
+            conversion_failed: false,
         }
     }
 
     #[must_use]
     pub fn empty(status: StatusCode) -> Self {
         Self::new(status, ResponseBody::Empty)
+    }
+
+    #[must_use]
+    pub fn owned_bytes(status: StatusCode, body: impl Into<bytes::Bytes>) -> Self {
+        Self::new(status, ResponseBody::Owned(body.into()))
+    }
+
+    #[must_use]
+    pub fn with_status(mut self, status: StatusCode) -> Self {
+        if !self.conversion_failed {
+            self.status = status;
+        }
+        self
+    }
+
+    pub(crate) fn conversion_failure() -> Self {
+        let mut response = Self::empty(StatusCode::INTERNAL_SERVER_ERROR).close();
+        response.conversion_failed = true;
+        response
+    }
+
+    pub(crate) fn body_mut(&mut self) -> &mut ResponseBody {
+        &mut self.body
+    }
+
+    pub(crate) fn set_content_length(mut self, length: u64) -> Self {
+        match &mut self.body {
+            ResponseBody::Stream(stream) => stream.content_length = Some(length),
+            body if body.content_length() == Some(length) => {}
+            _ => return Self::conversion_failure(),
+        }
+        self
+    }
+
+    pub(crate) fn suppress_body(&mut self) {
+        self.suppress_body = true;
+    }
+
+    pub(crate) fn sends_body(&self) -> bool {
+        !self.suppress_body && self.permits_body()
+    }
+
+    pub(crate) fn permits_body(&self) -> bool {
+        self.status.as_u16() >= 200 && !matches!(self.status.as_u16(), 204 | 304)
+    }
+
+    pub(crate) fn with_http_headers(
+        mut self,
+        headers: &http::HeaderMap,
+        arena: &crate::EphemeralBytesArena,
+    ) -> Self {
+        if headers.is_empty() {
+            return self;
+        }
+        if headers.contains_key("content-type") {
+            self.content_type = None;
+        }
+        let previous = self.headers.as_ref().map_or(&[][..], HeaderBlock::as_slice);
+        let len = previous.len()
+            + headers
+                .iter()
+                .map(|(name, value)| name.as_str().len() + value.as_bytes().len() + 4)
+                .sum::<usize>();
+        let mut output = arena.alloc(len);
+        output.extend_from_slice(previous);
+        for (name, value) in headers {
+            output.extend_from_slice(name.as_str().as_bytes());
+            output.extend_from_slice(b": ");
+            output.extend_from_slice(value.as_bytes());
+            output.extend_from_slice(b"\r\n");
+        }
+        match HeaderBlock::new(output.freeze()) {
+            Ok(block) => {
+                self.headers = Some(block);
+                self
+            }
+            Err(_) => Self::conversion_failure(),
+        }
     }
 
     #[must_use]

@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::net::SocketAddr;
 
-use crate::{Header, Request, Response, StatusCode};
+use crate::{EphemeralBytesArena, Header, Request, Response, StatusCode};
 
 /// Metadata made available to an [`Authenticator`].
 ///
@@ -70,6 +70,16 @@ pub trait Authenticator: Send + Sync + 'static {
         &'a self,
         request: AuthRequest<'a>,
     ) -> impl Future<Output = std::result::Result<Self::Principal, AuthFailure>> + Send + 'a;
+
+    /// Maps authentication failures to the application's HTTP error contract.
+    fn reject(
+        &self,
+        _request: AuthRequest<'_>,
+        failure: AuthFailure,
+        _arena: &EphemeralBytesArena,
+    ) -> Response {
+        failure.into_response()
+    }
 }
 
 /// The identity produced by a successful [`Authenticator`].
@@ -155,6 +165,7 @@ impl Authenticator for NoAuthenticator {
 pub async fn authenticate_required<A>(
     authenticator: &A,
     request: AuthRequest<'_>,
+    arena: &EphemeralBytesArena,
 ) -> std::result::Result<Authenticated<A::Principal>, Response>
 where
     A: Authenticator,
@@ -163,13 +174,14 @@ where
         .authenticate(request)
         .await
         .map(Authenticated)
-        .map_err(AuthFailure::into_response)
+        .map_err(|failure| authenticator.reject(request, failure, arena))
 }
 
 #[doc(hidden)]
 pub async fn authenticate_optional<A>(
     authenticator: &A,
     request: AuthRequest<'_>,
+    arena: &EphemeralBytesArena,
 ) -> std::result::Result<Option<Authenticated<A::Principal>>, Response>
 where
     A: Authenticator,
@@ -177,6 +189,6 @@ where
     match authenticator.authenticate(request).await {
         Ok(principal) => Ok(Some(Authenticated(principal))),
         Err(AuthFailure::MissingCredentials { .. }) => Ok(None),
-        Err(error) => Err(error.into_response()),
+        Err(error) => Err(authenticator.reject(request, error, arena)),
     }
 }

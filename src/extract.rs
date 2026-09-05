@@ -25,8 +25,8 @@ pub trait FromPath<'a>: Sized {
 
 /// Decodes one query-string value.
 ///
-/// The input has not been percent-decoded. Use `&str` to retain its borrowed,
-/// wire representation, or an owned/custom type when decoding is required.
+/// The input has been percent-decoded, including `+` as a query space.
+/// Borrowed values remain valid until the API method finishes.
 pub trait FromQuery<'a>: Sized {
     ///
     /// # Errors
@@ -108,8 +108,30 @@ macro_rules! impl_from_str {
 }
 
 impl_from_str!(
-    bool, i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32, f64
+    i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32, f64
 );
+
+impl FromQuery<'_> for bool {
+    fn from_query(value: &str) -> Result<Self, ExtractError> {
+        match value.to_ascii_lowercase().as_str() {
+            "true" | "1" | "on" | "yes" => Ok(true),
+            "false" | "0" | "off" | "no" => Ok(false),
+            _ => Err(ExtractError),
+        }
+    }
+}
+
+impl FromPath<'_> for bool {
+    fn from_path(value: &str) -> Result<Self, ExtractError> {
+        Self::from_query(value)
+    }
+}
+
+impl FromHeader<'_> for bool {
+    fn from_header(value: &[u8]) -> Result<Self, ExtractError> {
+        Self::from_query(std::str::from_utf8(value).map_err(|_| ExtractError)?)
+    }
+}
 
 #[doc(hidden)]
 pub fn path<'a, T>(value: &'a str) -> Result<T, ExtractError>
@@ -120,21 +142,36 @@ where
 }
 
 #[doc(hidden)]
-pub fn query_required<'a, T>(query: Option<&'a str>, key: &str) -> Result<T, ExtractError>
+pub fn query_required<'a, T>(
+    query: &'a crate::params::QueryParams<'_>,
+    key: &str,
+) -> Result<T, ExtractError>
 where
     T: FromQuery<'a>,
 {
-    query_value(query, key)
-        .ok_or(ExtractError)
-        .and_then(T::from_query)
+    query.get(key).ok_or(ExtractError).and_then(T::from_query)
 }
 
 #[doc(hidden)]
-pub fn query_optional<'a, T>(query: Option<&'a str>, key: &str) -> Result<Option<T>, ExtractError>
+pub fn query_optional<'a, T>(
+    query: &'a crate::params::QueryParams<'_>,
+    key: &str,
+) -> Result<Option<T>, ExtractError>
 where
     T: FromQuery<'a>,
 {
-    query_value(query, key).map(T::from_query).transpose()
+    query.get(key).map(T::from_query).transpose()
+}
+
+#[doc(hidden)]
+pub fn query_many<'a, T>(
+    query: &'a crate::params::QueryParams<'_>,
+    key: &'a str,
+) -> Result<Vec<T>, ExtractError>
+where
+    T: FromQuery<'a>,
+{
+    query.values(key).map(T::from_query).collect()
 }
 
 #[doc(hidden)]
@@ -151,11 +188,4 @@ where
     T: FromHeader<'a>,
 {
     value.map(T::from_header).transpose()
-}
-
-fn query_value<'a>(query: Option<&'a str>, key: &str) -> Option<&'a str> {
-    query?.split('&').find_map(|pair| {
-        let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
-        (name == key).then_some(value)
-    })
 }
