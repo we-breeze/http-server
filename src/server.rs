@@ -1,23 +1,26 @@
 use std::future::Future;
-use std::io::IoSlice;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::{Buf, BufMut, BytesMut};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tracing::{debug, warn};
 
 use crate::{
-    Authenticator, EphemeralBytes, EphemeralBytesArena, Error, Header, NoAuthenticator, Request,
-    Response, Result, StatusCode,
+    Authenticator, EphemeralBytesArena, Error, Header, NoAuthenticator, Request, Response, Result,
+    StatusCode,
 };
+
+mod write;
+use write::write_response;
 
 const INITIAL_READ_BUFFER_CAPACITY: usize = 4 * 1024;
 const MAX_REQUEST_HEADERS: usize = 64;
+const DEFAULT_ARENA_CHUNK_CAPACITY: usize = 16 * 1024 * 1024;
 
 /// Handles one borrowed request and produces an owned response.
 ///
@@ -30,6 +33,18 @@ pub trait Handler<A = NoAuthenticator>: Send + Sync + 'static
 where
     A: Authenticator,
 {
+    /// Static route metadata used to compose macro-exported API groups.
+    #[doc(hidden)]
+    fn route_priority(&self, _path: &str, _method: &str) -> Option<usize> {
+        None
+    }
+
+    /// Bitset of standard methods accepted by paths matching this request.
+    #[doc(hidden)]
+    fn route_methods(&self, _path: &str) -> u16 {
+        0
+    }
+
     fn call<'a>(
         &'a self,
         request: Request<'a>,
@@ -44,19 +59,30 @@ pub struct ServerConfig {
     /// response bodies. Clone the same arena into dependent SDKs at process
     /// startup when they should share its two chunks.
     pub arena: EphemeralBytesArena,
+    /// Origin policy; absent when the application does not expose cross-origin APIs.
+    pub cors: Option<crate::Cors>,
+    /// Application mapping for failed parameter bindings.
+    pub rejection_handler: crate::RejectionHandler,
     /// Maximum simultaneously accepted TCP connections.
     pub max_connections: usize,
     /// Maximum bytes allowed before the complete HTTP request header is found.
     pub max_request_head_bytes: usize,
     /// Maximum fixed Content-Length request body.
     pub max_request_body_bytes: usize,
-    /// Maximum time for one complete request read, handler invocation, and
-    /// response write.
+    /// Maximum time for request read and handler invocation, or an inactive
+    /// response write. Streaming downloads reset this timeout after each chunk.
     pub request_timeout: Duration,
     /// Maximum time to wait for accepted connections after shutdown begins.
     pub shutdown_grace: Duration,
     /// Whether to enable `TCP_NODELAY` on each accepted socket.
     pub tcp_nodelay: bool,
+}
+
+impl Default for ServerConfig {
+    /// Creates the default server limits and a server-owned response arena.
+    fn default() -> Self {
+        Self::new(EphemeralBytesArena::new(DEFAULT_ARENA_CHUNK_CAPACITY))
+    }
 }
 
 impl ServerConfig {
@@ -65,6 +91,8 @@ impl ServerConfig {
     pub fn new(arena: EphemeralBytesArena) -> Self {
         Self {
             arena,
+            cors: None,
+            rejection_handler: crate::rejection::default_rejection,
             max_connections: 1024,
             max_request_head_bytes: 32 * 1024,
             max_request_body_bytes: 1024 * 1024,
@@ -75,6 +103,9 @@ impl ServerConfig {
     }
 
     fn validate(&self) -> Result<()> {
+        if self.cors.as_ref().is_some_and(|cors| !cors.validate()) {
+            return Err(Error::InvalidConfig("invalid CORS policy"));
+        }
         if self.max_connections == 0 {
             return Err(Error::InvalidConfig(
                 "max_connections must be greater than zero",
@@ -122,7 +153,19 @@ where
     ///
     /// Returns an error when the configuration is invalid or the socket cannot
     /// be bound.
-    pub async fn bind(address: SocketAddr, handler: H, config: ServerConfig) -> Result<Self> {
+    pub async fn bind(address: SocketAddr, handler: H) -> Result<Self> {
+        Self::bind_with_config(address, handler, ServerConfig::default()).await
+    }
+
+    /// Binds a server with application-specific limits or policies.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid configuration or listener address.
+    pub async fn bind_with_config(
+        address: SocketAddr,
+        handler: H,
+        config: ServerConfig,
+    ) -> Result<Self> {
         bind_server(address, handler, NoAuthenticator, config).await
     }
 }
@@ -143,6 +186,24 @@ where
     /// Returns an error when the configuration is invalid or the socket cannot
     /// be bound.
     pub async fn bind_with_authenticator(
+        address: SocketAddr,
+        handler: H,
+        authenticator: A,
+    ) -> Result<Self> {
+        Self::bind_with_authenticator_and_config(
+            address,
+            handler,
+            authenticator,
+            ServerConfig::default(),
+        )
+        .await
+    }
+
+    /// Binds authenticated APIs with application-specific limits or policies.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid configuration or listener address.
+    pub async fn bind_with_authenticator_and_config(
         address: SocketAddr,
         handler: H,
         authenticator: A,
@@ -291,18 +352,39 @@ where
             Ok(Err(RequestFailure::Closed)) => return Ok(()),
             Ok(Err(failure)) => {
                 let response = Response::empty(failure.status()).close();
-                write_response(&mut stream, &config.arena, &response, true).await?;
+                write_response(
+                    &mut stream,
+                    &config.arena,
+                    response,
+                    true,
+                    config.request_timeout,
+                )
+                .await?;
                 return Ok(());
             }
             Err(_) => {
                 let response = Response::empty(StatusCode::REQUEST_TIMEOUT).close();
-                write_response(&mut stream, &config.arena, &response, true).await?;
+                write_response(
+                    &mut stream,
+                    &config.arena,
+                    response,
+                    true,
+                    config.request_timeout,
+                )
+                .await?;
                 return Ok(());
             }
         };
 
         let close = !request_keep_alive || response.should_close();
-        write_response(&mut stream, &config.arena, &response, close).await?;
+        write_response(
+            &mut stream,
+            &config.arena,
+            response,
+            close,
+            config.request_timeout,
+        )
+        .await?;
         read_buffer.advance(consumed);
         if close {
             return Ok(());
@@ -359,7 +441,7 @@ where
             value: source.value,
         };
     }
-    let request = Request::new(
+    let mut request = Request::new(
         method,
         target,
         &request_header_storage[..parsed.headers.len()],
@@ -367,9 +449,27 @@ where
         peer_addr,
         &config.arena,
     );
-    let response = handler.call(request, authenticator).await;
+    request.rejection_handler = config.rejection_handler;
+    let cors_origin = request.header("origin");
+    let preflight = config
+        .cors
+        .as_ref()
+        .and_then(|cors| cors.preflight(&request));
+    let mut response = if let Some(response) = preflight {
+        response
+    } else {
+        let response = handler.call(request, authenticator).await;
+        if let Some(cors) = &config.cors {
+            cors.apply(cors_origin, response, &config.arena)
+        } else {
+            response
+        }
+    };
+    if method == "HEAD" {
+        response.suppress_body();
+    }
 
-    if !response.status().is_valid() {
+    if response.status().as_u16() > 599 {
         return Ok((
             Response::empty(StatusCode::INTERNAL_SERVER_ERROR).close(),
             inspection.total_len,
@@ -458,121 +558,6 @@ async fn read_more(
         .map_err(RequestFailure::Io)?;
     if read == 0 {
         return Err(RequestFailure::Closed);
-    }
-    Ok(())
-}
-
-async fn write_response(
-    stream: &mut TcpStream,
-    arena: &EphemeralBytesArena,
-    response: &Response,
-    close: bool,
-) -> std::io::Result<()> {
-    let head = encode_response_head(arena, response, close);
-    write_all_vectored(stream, head.as_ref(), response.body().as_slice()).await
-}
-
-fn encode_response_head(
-    arena: &EphemeralBytesArena,
-    response: &Response,
-    close: bool,
-) -> EphemeralBytes {
-    let body_len = response.body().len();
-    let mut body_decimal = itoa::Buffer::new();
-    let content_length = body_decimal.format(body_len);
-    let status = response.status();
-    let reason = status.reason();
-    let custom_headers = response
-        .header_block()
-        .map_or(&[][..], |headers| headers.as_slice());
-    let content_type_len = response
-        .content_type_ref()
-        .map_or(0, |value| b"Content-Type: ".len() + value.len() + 2);
-    let allow_len = response
-        .allow_ref()
-        .map_or(0, |value| b"Allow: ".len() + value.len() + 2);
-    let www_authenticate_len = response
-        .www_authenticate_ref()
-        .map_or(0, |value| b"WWW-Authenticate: ".len() + value.len() + 2);
-    let connection_len = if close {
-        b"Connection: close\r\n".len()
-    } else {
-        0
-    };
-    let capacity = b"HTTP/1.1 ".len()
-        + 3
-        + 1
-        + reason.len()
-        + 2
-        + custom_headers.len()
-        + content_type_len
-        + allow_len
-        + www_authenticate_len
-        + b"Content-Length: ".len()
-        + content_length.len()
-        + 2
-        + connection_len
-        + 2;
-    let mut output = arena.alloc(capacity);
-    output.extend_from_slice(b"HTTP/1.1 ");
-    let mut status_decimal = itoa::Buffer::new();
-    output.extend_from_slice(status_decimal.format(status.as_u16()).as_bytes());
-    output.extend_from_slice(b" ");
-    output.extend_from_slice(reason.as_bytes());
-    output.extend_from_slice(b"\r\n");
-    output.extend_from_slice(custom_headers);
-    if let Some(content_type) = response.content_type_ref() {
-        output.extend_from_slice(b"Content-Type: ");
-        output.extend_from_slice(content_type.as_bytes());
-        output.extend_from_slice(b"\r\n");
-    }
-    if let Some(allow) = response.allow_ref() {
-        output.extend_from_slice(b"Allow: ");
-        output.extend_from_slice(allow.as_bytes());
-        output.extend_from_slice(b"\r\n");
-    }
-    if let Some(challenge) = response.www_authenticate_ref() {
-        output.extend_from_slice(b"WWW-Authenticate: ");
-        output.extend_from_slice(challenge.as_bytes());
-        output.extend_from_slice(b"\r\n");
-    }
-    output.extend_from_slice(b"Content-Length: ");
-    output.extend_from_slice(content_length.as_bytes());
-    output.extend_from_slice(b"\r\n");
-    if close {
-        output.extend_from_slice(b"Connection: close\r\n");
-    }
-    output.extend_from_slice(b"\r\n");
-    debug_assert_eq!(output.len(), capacity);
-    output.freeze()
-}
-
-async fn write_all_vectored(
-    stream: &mut TcpStream,
-    head: &[u8],
-    body: &[u8],
-) -> std::io::Result<()> {
-    let mut head_offset = 0;
-    let mut body_offset = 0;
-    while head_offset < head.len() || body_offset < body.len() {
-        let slices = [
-            IoSlice::new(&head[head_offset..]),
-            IoSlice::new(&body[body_offset..]),
-        ];
-        let written = stream.write_vectored(&slices).await?;
-        if written == 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::WriteZero,
-                "failed to write complete HTTP response",
-            ));
-        }
-        let head_remaining = head.len() - head_offset;
-        if written < head_remaining {
-            head_offset += written;
-        } else {
-            head_offset = head.len();
-            body_offset += written - head_remaining;
-        }
     }
     Ok(())
 }

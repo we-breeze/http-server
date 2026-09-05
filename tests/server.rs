@@ -33,7 +33,7 @@ impl Handler for Echo {
                     .content_type("application/octet-stream")
             }
             ("GET", "/empty") => Response::static_bytes(StatusCode::OK, b"done"),
-            _ => Response::empty(StatusCode::new(404)),
+            _ => Response::empty(StatusCode::NOT_FOUND),
         }
     }
 }
@@ -62,14 +62,13 @@ async fn read_to_close(stream: &mut TcpStream) -> Vec<u8> {
 
 #[tokio::test]
 async fn borrowed_request_and_arena_body_support_keep_alive_and_pipelining() {
-    let arena = EphemeralBytesArena::new(1024);
     let response_used_arena = Arc::new(AtomicBool::new(false));
-    let server = Server::bind(
+    let server = Server::bind_with_config(
         "127.0.0.1:0".parse().unwrap(),
         Echo {
             response_used_arena: Arc::clone(&response_used_arena),
         },
-        ServerConfig::new(arena),
+        ServerConfig::default(),
     )
     .await
     .unwrap();
@@ -105,7 +104,7 @@ async fn rejects_a_body_over_the_configured_limit_before_calling_handler() {
     let arena = EphemeralBytesArena::new(1024);
     let mut config = ServerConfig::new(arena);
     config.max_request_body_bytes = 4;
-    let server = Server::bind("127.0.0.1:0".parse().unwrap(), unused_handler, config)
+    let server = Server::bind_with_config("127.0.0.1:0".parse().unwrap(), unused_handler, config)
         .await
         .unwrap();
     let address = server.local_addr().unwrap();
@@ -131,7 +130,7 @@ async fn rejects_excess_connections_without_stalling_active_connections() {
     let arena = EphemeralBytesArena::new(1024);
     let mut config = ServerConfig::new(arena);
     config.max_connections = 1;
-    let server = Server::bind(
+    let server = Server::bind_with_config(
         "127.0.0.1:0".parse().unwrap(),
         Echo {
             response_used_arena: Arc::new(AtomicBool::new(false)),
@@ -163,7 +162,7 @@ async fn bind_rejects_invalid_limits() {
     let mut config = ServerConfig::new(arena);
     config.max_connections = 0;
 
-    let result = Server::bind(
+    let result = Server::bind_with_config(
         address,
         Echo {
             response_used_arena: Arc::new(AtomicBool::new(false)),

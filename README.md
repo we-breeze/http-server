@@ -8,8 +8,9 @@ have different connection ownership, lifecycle, and observability needs.
 
 - Request line, headers, target, query, and a fixed-length body borrow the
   connection receive buffer. The handler finishes before that buffer is reused.
-- Response bodies are written once into `EphemeralBytesArena` and held by an
-  `EphemeralBytes` allocation until the socket write completes.
+- JSON response bodies are written into `EphemeralBytesArena` and held by an
+  `EphemeralBytes` allocation until the socket write completes. Owned bytes
+  and download streams are sent directly from their backing storage.
 - The server writes the generated HTTP head and body with vectored writes; it
   never concatenates or copies the arena-backed body into another framework
   buffer.
@@ -18,12 +19,13 @@ The unavoidable kernel-to-user-space receive copy still exists. “Zero-copy”
 here means no additional framework copy for parsed request fields or an
 arena-backed response body.
 
-## First-version scope
+## Transport scope
 
 HTTP/1.1 with bounded, fixed `Content-Length` bodies and sequential request
 handling per connection. Pipelined requests are supported in wire order.
-Chunked request bodies, `Expect: 100-continue`, HTTP/2, streaming responses,
-and WebSockets are intentionally outside the initial contract.
+Finite download streams support automatic chunked response framing or a known
+`Content-Length`. Chunked request bodies, `Expect: 100-continue`, HTTP/2,
+SSE-specific behavior, and WebSockets remain outside this release.
 
 ## API macros
 
@@ -32,7 +34,7 @@ inside generated transport code.
 
 ```toml
 [dependencies]
-http-server = { version = "0.1", features = ["macros"] }
+http-server = { git = "https://github.com/we-breeze/http-server.git", tag = "v0.0.2", features = ["macros"] }
 serde = { version = "1", features = ["derive"] }
 ```
 
@@ -83,7 +85,9 @@ impl UserApi {
 The macro implements `Handler` with static route dispatch: there is no route
 map, boxed handler, or exposed transport request. A route's captures bind the
 first parameters in route order. Remaining scalar parameters come from query
-keys with the same name; one remaining non-scalar parameter is the JSON body.
+keys with the same name. Query values are URL-decoded, and `Vec<T>` receives
+repeated keys. A business struct binds the JSON body; `Form<T>`, `Multipart`,
+and `&[u8]` bind URL-encoded, multipart, and raw bodies respectively.
 `Authenticated<T>` is an explicit exception: it is supplied by the
 authentication layer instead of body decoding.
 `headers(...)` is explicit because a plain `&str` cannot otherwise be
@@ -164,8 +168,7 @@ impl UserApi {
 }
 ```
 
-Start it with `Server::bind_with_authenticator(addr, UserApi, InternalAuth,
-config).await?`.
+Start it with `Server::bind_with_authenticator(addr, UserApi, InternalAuth).await?`.
 
 `AuthRequest` exposes only method, path, headers, and peer address; the body
 remains unavailable to authentication. An authenticator must return an owned
@@ -181,11 +184,37 @@ using owned DTO fields may allocate by codec design.
 
 ## Usage
 
-The application chooses arena capacity at startup. Each `EphemeralBytesArena`
+Call `Server::bind(address, handler)` or
+`Server::bind_with_authenticator(address, handler, authenticator)`. Both use
+default limits and a server-owned arena with two 16 MiB chunks (32 MiB total).
+Use the corresponding `_with_config` / `_and_config` entrypoint when setting
+application policies such as CORS or validation error mapping.
+
+Use `ServerConfig::new(arena)` when explicitly sharing an arena with other
+Breeze SDKs. Each `EphemeralBytesArena`
 contains two chunks and falls back to heap storage if both are live or a frame
 is larger than one chunk. Use the same cloned arena in dependent Breeze SDKs
 when their short-lived response/request frames should share the process-wide
 budget.
+
+## Download streams
+
+An annotated method may return `impl Stream<Item = Result<Bytes, E>> + Send + 'static`
+(`E: Display + Send + 'static`). The HTTP client's response byte stream can be
+returned directly; it must own its upstream response. The runtime writes each
+chunk as it becomes available and bounds read-ahead to one queued chunk.
+
+Use `HttpResponse::new(stream)` for download metadata: `.status(status)`,
+`.header(name, value)?`, and `.content_length(length)` when the exact upstream
+length is known. Unknown lengths use HTTP/1.1 chunked encoding. Known lengths
+are checked while writing; stream errors or mismatched lengths close the
+connection. A write error, idle timeout, or cancelled connection drops the
+upstream producer. HEAD and bodyless statuses do not poll the stream.
+
+`http_server::StatusCode` re-exports `http::StatusCode`. Return `(StatusCode, T)`
+for an explicit status with a JSON value or stream. A plain business value
+still receives status 200; redirects use `Redirect::found` (302) or
+`Redirect::temporary` (307).
 
 ## Verification
 

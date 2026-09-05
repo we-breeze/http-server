@@ -4,6 +4,35 @@ use serde::Serialize;
 
 use crate::{EphemeralBytesArena, EphemeralBytesMut, Response, StatusCode};
 
+/// Storage for borrowed JSON fields, including strings requiring unescaping.
+#[doc(hidden)]
+pub struct JsonBody<'a> {
+    raw: &'a [u8],
+    decoded: Option<serde_json::Value>,
+}
+
+impl<'a> JsonBody<'a> {
+    /// # Errors
+    /// Returns an error when escaped JSON cannot be decoded.
+    pub fn new(raw: &'a [u8]) -> Result<Self, serde_json::Error> {
+        let decoded = if raw.contains(&b'\\') {
+            Some(serde_json::from_slice(raw)?)
+        } else {
+            None
+        };
+        Ok(Self { raw, decoded })
+    }
+
+    /// # Errors
+    /// Returns an error when the body cannot become the business type.
+    pub fn decode<'b, T: serde::Deserialize<'b>>(&'b self) -> Result<T, serde_json::Error> {
+        match &self.decoded {
+            Some(value) => T::deserialize(value),
+            None => serde_json::from_slice(self.raw),
+        }
+    }
+}
+
 #[doc(hidden)]
 pub fn json_body<'a, T>(body: &'a [u8]) -> Result<T, serde_json::Error>
 where
@@ -61,7 +90,7 @@ where
 {
     match encode_json(value, arena) {
         Ok(body) => Response::bytes(status, body).content_type("application/json"),
-        Err(_) => Response::empty(StatusCode::INTERNAL_SERVER_ERROR).close(),
+        Err(_) => Response::conversion_failure(),
     }
 }
 
@@ -121,6 +150,35 @@ impl IntoHttpError for ApiError {
             },
             arena,
         )
+    }
+}
+
+impl From<crate::HeaderBlockError> for ApiError {
+    fn from(error: crate::HeaderBlockError) -> Self {
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, error.to_string())
+    }
+}
+
+impl IntoHttpError for crate::HeaderBlockError {
+    fn into_http_error(self, arena: &EphemeralBytesArena) -> Response {
+        ApiError::from(self).into_http_error(arena)
+    }
+}
+
+impl From<crate::BodyError> for ApiError {
+    fn from(error: crate::BodyError) -> Self {
+        let status = if matches!(error, crate::BodyError::UnsupportedMediaType) {
+            StatusCode::UNSUPPORTED_MEDIA_TYPE
+        } else {
+            StatusCode::BAD_REQUEST
+        };
+        Self::new(status, error.to_string())
+    }
+}
+
+impl IntoHttpError for crate::BodyError {
+    fn into_http_error(self, arena: &EphemeralBytesArena) -> Response {
+        ApiError::from(self).into_http_error(arena)
     }
 }
 

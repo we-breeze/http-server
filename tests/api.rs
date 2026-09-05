@@ -159,12 +159,12 @@ async fn request(address: std::net::SocketAddr, request: &[u8]) -> Vec<u8> {
 #[tokio::test]
 async fn macro_binds_path_query_json_body_and_declared_headers() {
     let calls = Arc::new(AtomicUsize::new(0));
-    let server = Server::bind(
+    let server = Server::bind_with_config(
         "127.0.0.1:0".parse().unwrap(),
         UserApi {
             calls: Arc::clone(&calls),
         },
-        ServerConfig::new(EphemeralBytesArena::new(1024)),
+        ServerConfig::default(),
     )
     .await
     .unwrap();
@@ -189,7 +189,7 @@ async fn macro_binds_path_query_json_body_and_declared_headers() {
 #[tokio::test]
 async fn macro_rejects_non_json_body_before_invoking_business_code() {
     let calls = Arc::new(AtomicUsize::new(0));
-    let server = Server::bind(
+    let server = Server::bind_with_config(
         "127.0.0.1:0".parse().unwrap(),
         UserApi {
             calls: Arc::clone(&calls),
@@ -218,7 +218,7 @@ async fn macro_rejects_non_json_body_before_invoking_business_code() {
 
 #[tokio::test]
 async fn macro_returns_405_with_methods_for_matched_path() {
-    let server = Server::bind(
+    let server = Server::bind_with_config(
         "127.0.0.1:0".parse().unwrap(),
         UserApi {
             calls: Arc::new(AtomicUsize::new(0)),
@@ -237,7 +237,7 @@ async fn macro_returns_405_with_methods_for_matched_path() {
     .await;
     assert_eq!(
         response,
-        b"HTTP/1.1 405 Method Not Allowed\r\nAllow: GET, POST\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        b"HTTP/1.1 405 Method Not Allowed\r\nallow: GET, POST\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
     );
 
     shutdown.send(()).unwrap();
@@ -246,7 +246,7 @@ async fn macro_returns_405_with_methods_for_matched_path() {
 
 #[tokio::test]
 async fn macro_serializes_a_business_forbidden_error() {
-    let server = Server::bind(
+    let server = Server::bind_with_config(
         "127.0.0.1:0".parse().unwrap(),
         UserApi {
             calls: Arc::new(AtomicUsize::new(0)),
@@ -274,7 +274,7 @@ async fn macro_serializes_a_business_forbidden_error() {
 
 #[tokio::test]
 async fn custom_authenticator_injects_or_rejects_a_typed_principal() {
-    let server = Server::bind_with_authenticator(
+    let server = Server::bind_with_authenticator_and_config(
         "127.0.0.1:0".parse().unwrap(),
         ProtectedApi,
         HeaderAuthenticator,
@@ -342,7 +342,7 @@ async fn custom_authenticator_injects_or_rejects_a_typed_principal() {
 #[test]
 fn api_error_preserves_business_status() {
     assert_eq!(
-        ApiError::new(StatusCode::new(409), "conflict").to_string(),
+        ApiError::new(StatusCode::CONFLICT, "conflict").to_string(),
         "conflict"
     );
 }
