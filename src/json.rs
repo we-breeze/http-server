@@ -1,37 +1,6 @@
-use std::io::{self, Write};
-
 use serde::Serialize;
 
-use crate::{EphemeralBytesArena, EphemeralBytesMut, Response, StatusCode};
-
-/// Storage for borrowed JSON fields, including strings requiring unescaping.
-#[doc(hidden)]
-pub struct JsonBody<'a> {
-    raw: &'a [u8],
-    decoded: Option<serde_json::Value>,
-}
-
-impl<'a> JsonBody<'a> {
-    /// # Errors
-    /// Returns an error when escaped JSON cannot be decoded.
-    pub fn new(raw: &'a [u8]) -> Result<Self, serde_json::Error> {
-        let decoded = if raw.contains(&b'\\') {
-            Some(serde_json::from_slice(raw)?)
-        } else {
-            None
-        };
-        Ok(Self { raw, decoded })
-    }
-
-    /// # Errors
-    /// Returns an error when the body cannot become the business type.
-    pub fn decode<'b, T: serde::Deserialize<'b>>(&'b self) -> Result<T, serde_json::Error> {
-        match &self.decoded {
-            Some(value) => T::deserialize(value),
-            None => serde_json::from_slice(self.raw),
-        }
-    }
-}
+use crate::{EphemeralBytesArena, Response, StatusCode};
 
 #[doc(hidden)]
 pub fn json_body<'a, T>(body: &'a [u8]) -> Result<T, serde_json::Error>
@@ -89,7 +58,7 @@ where
     T: Serialize,
 {
     match encode_json(value, arena) {
-        Ok(body) => Response::bytes(status, body).content_type("application/json"),
+        Ok(body) => Response::segmented(status, body).content_type("application/json"),
         Err(_) => Response::conversion_failure(),
     }
 }
@@ -190,44 +159,39 @@ struct ErrorPayload {
 fn encode_json<T>(
     value: T,
     arena: &EphemeralBytesArena,
-) -> Result<crate::EphemeralBytes, serde_json::Error>
+) -> Result<brz_io::Reader, serde_json::Error>
 where
     T: Serialize,
 {
-    let mut measure = CountingWriter::default();
-    serde_json::to_writer(&mut measure, &value)?;
-    let mut output = arena.alloc(measure.len);
-    serde_json::to_writer(ArenaWriter(&mut output), &value)?;
-    Ok(output.freeze())
+    let mut output = brz_io::Writer::new(arena);
+    serde_json::to_writer(&mut output, &value)?;
+    Ok(output.into_reader())
 }
 
-#[derive(Default)]
-struct CountingWriter {
-    len: usize,
-}
+#[cfg(test)]
+mod tests {
+    use serde::Serialize;
+    use std::cell::Cell;
 
-impl Write for CountingWriter {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.len = self
-            .len
-            .checked_add(bytes.len())
-            .ok_or_else(|| io::Error::other("JSON response is too large"))?;
-        Ok(bytes.len())
+    struct Once(Cell<usize>);
+
+    impl Serialize for Once {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            self.0.set(self.0.get() + 1);
+            assert_eq!(self.0.get(), 1, "JSON must be serialized only once");
+            serializer.serialize_str("a long response crossing arena segments")
+        }
     }
 
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-struct ArenaWriter<'a>(&'a mut EphemeralBytesMut);
-
-impl Write for ArenaWriter<'_> {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0.write(bytes)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
+    #[test]
+    fn response_serializes_once_into_segments() {
+        let value = Once(Cell::new(0));
+        let arena = crate::EphemeralBytesArena::new(3);
+        let output = super::encode_json(&value, &arena).unwrap();
+        assert_eq!(
+            output.as_slice(),
+            br#""a long response crossing arena segments""#
+        );
+        assert_eq!(value.0.get(), 1);
     }
 }

@@ -114,7 +114,7 @@ impl UserApi {
         input: UpdateUser<'a>,
         trace_id: Option<&'a str>,
     ) -> ApiResult<UserView<'a>> {
-        std::future::ready(()).await;
+        tokio::task::yield_now().await;
         self.calls.fetch_add(1, Ordering::Relaxed);
         if input.name.is_empty() {
             return Err(ApiError::bad_request("name is required"));
@@ -345,4 +345,85 @@ fn api_error_preserves_business_status() {
         ApiError::new(StatusCode::CONFLICT, "conflict").to_string(),
         "conflict"
     );
+}
+
+#[tokio::test]
+async fn segmented_json_borrows_escaped_fields_across_await_and_pipelining() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut config = ServerConfig::new(EphemeralBytesArena::new(1024 * 1024));
+    // Force the rest of the body through the bounded socket-to-Writer copy.
+    config.max_request_head_bytes = 256;
+    let server = Server::bind_with_config(
+        "127.0.0.1:0".parse().unwrap(),
+        UserApi {
+            calls: Arc::clone(&calls),
+        },
+        config,
+    )
+    .await
+    .unwrap();
+    let address = server.local_addr().unwrap();
+    let (shutdown, task) = start_server(server);
+    // The first name spans several arena segments. The second has both a
+    // surrogate pair and escaped ASCII, returned as &str by the handler.
+    let names = ["长名字".repeat(4000), "ab𝄞".to_owned()];
+    let bodies = [
+        serde_json::json!({"name": names[0]}).to_string(),
+        r#"{"name":"a\u0062\uD834\uDD1E"}"#.to_owned(),
+    ];
+    let mut wire = Vec::new();
+    let mut expected = Vec::new();
+    for (index, body) in bodies.iter().enumerate() {
+        let connection = if index == 1 {
+            "Connection: close\r\n"
+        } else {
+            ""
+        };
+        wire.extend_from_slice(format!(
+            "POST /v1/users/42 HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{connection}\r\n{body}", body.len()
+        ).as_bytes());
+        let result = serde_json::to_vec(&UserView {
+            id: 42,
+            name: &names[index],
+            verbose: false,
+            trace_id: None,
+        })
+        .unwrap();
+        expected.extend_from_slice(format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{connection}\r\n", result.len()
+        ).as_bytes());
+        expected.extend_from_slice(&result);
+    }
+    let response = request(address, &wire).await;
+    assert_eq!(response, expected);
+    assert_eq!(calls.load(Ordering::Relaxed), 2);
+    shutdown.send(()).unwrap();
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn invalid_segmented_json_is_rejected_without_losing_the_next_request() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let server = Server::bind_with_config(
+        "127.0.0.1:0".parse().unwrap(),
+        UserApi {
+            calls: Arc::clone(&calls),
+        },
+        ServerConfig::new(EphemeralBytesArena::new(3)),
+    )
+    .await
+    .unwrap();
+    let address = server.local_addr().unwrap();
+    let (shutdown, task) = start_server(server);
+    let bad = r#"{"name":"bad\uD800"}"#;
+    let response = request(address, format!(
+        "POST /v1/users/42 HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{bad}GET /v1/users/42 HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", bad.len()
+    ).as_bytes()).await;
+    let response = String::from_utf8(response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 400 Bad Request\r\n"));
+    assert!(response.contains("HTTP/1.1 200 OK\r\n"));
+    assert!(response.ends_with(r#"{"id":42,"name":"read","verbose":false,"trace_id":null}"#));
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    shutdown.send(()).unwrap();
+    task.await.unwrap();
 }

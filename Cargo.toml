@@ -11,6 +11,9 @@ members = ["macros"]
 resolver = "3"
 
 [dependencies]
+brz-metrics = { package = "metrics", git = "https://github.com/we-breeze/metrics.git", tag = "v0.0.2" }
+brz-io = { package = "io", git = "https://github.com/we-breeze/io.git", tag = "v0.0.1" }
+brz-json = { package = "json", git = "https://github.com/we-breeze/json.git", tag = "v0.0.1" }
 brz-ds = { package = "ds", git = "https://github.com/we-breeze/ds.git", tag = "v0.0.1", version = "0.1.0", default-features = false }
 bytes = "1"
 form_urlencoded = "1"

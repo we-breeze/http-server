@@ -17,6 +17,14 @@ pub(super) async fn write_response(
     if !response.sends_body() {
         return tokio::time::timeout(idle_timeout, socket.write_all(head.as_ref())).await?;
     }
+    if let ResponseBody::Segmented(body) = response.body_mut() {
+        return tokio::time::timeout(idle_timeout, async {
+            socket.write_all(head.as_ref()).await?;
+            tokio::io::copy_buf(body, socket).await?;
+            Ok(())
+        })
+        .await?;
+    }
     let length = response.body().content_length();
     let ResponseBody::Stream(body) = response.body_mut() else {
         return tokio::time::timeout(
