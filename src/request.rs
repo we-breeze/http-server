@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 
 use crate::{EphemeralBytesArena, EphemeralBytesMut};
 
-/// One parsed HTTP request, borrowing its connection's receive buffer.
+/// One parsed HTTP request, borrowing headers and an arena-backed body.
 ///
 /// The request is valid only for the duration of
 /// [`Handler::call`](crate::Handler::call). In particular, a handler must not
@@ -12,7 +12,7 @@ pub struct Request<'a> {
     method: &'a str,
     target: &'a str,
     headers: &'a [Header<'a>],
-    body: &'a [u8],
+    body: &'a brz_io::Reader,
     peer_addr: SocketAddr,
     response_arena: &'a EphemeralBytesArena,
     pub(crate) rejection_handler: crate::RejectionHandler,
@@ -23,7 +23,7 @@ impl<'a> Request<'a> {
         method: &'a str,
         target: &'a str,
         headers: &'a [Header<'a>],
-        body: &'a [u8],
+        body: &'a brz_io::Reader,
         peer_addr: SocketAddr,
         response_arena: &'a EphemeralBytesArena,
     ) -> Self {
@@ -80,10 +80,19 @@ impl<'a> Request<'a> {
             .map(|header| header.value)
     }
 
-    /// The complete fixed-length request body.
+    /// The complete fixed-length request body. A segmented body is merged on
+    /// first access and cached for this request. JSON extraction instead uses
+    /// [`Self::json_body`] to borrow individual fields without merging the body.
     #[must_use]
     pub fn body(&self) -> &'a [u8] {
-        self.body
+        self.body.as_slice()
+    }
+
+    /// Parse JSON with an independent cursor over the arena-backed body.
+    /// Keep this holder alive while using borrowed fields, including across awaits.
+    #[must_use]
+    pub fn json_body(&self) -> brz_json::JsonReader<'a> {
+        brz_json::JsonReader::from_borrowed(self.body)
     }
 
     /// Remote peer accepted for this connection.
@@ -140,4 +149,42 @@ impl<'a> Request<'a> {
 pub struct Header<'a> {
     pub name: &'a str,
     pub value: &'a [u8],
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use super::Request;
+    use crate::EphemeralBytesArena;
+
+    #[test]
+    fn borrowed_json_and_cached_raw_body_coexist() {
+        #[derive(serde::Deserialize)]
+        struct Name<'a> {
+            name: &'a str,
+        }
+        let arena = EphemeralBytesArena::new(3);
+        let raw = br#"{"name":"a\u0062"}"#;
+        let mut writer = brz_io::Writer::new(&arena);
+        writer.write_all(raw).unwrap();
+        let body = writer.into_reader();
+        let request = Request::new(
+            "POST",
+            "/",
+            &[],
+            &body,
+            "127.0.0.1:1".parse().unwrap(),
+            &arena,
+        );
+        let json = request.json_body();
+        let name: Name<'_> = json.decode().unwrap();
+        assert_eq!(name.name, "ab");
+        assert_eq!(body.position(), 0);
+        let first = request.body();
+        assert_eq!(first, raw);
+        assert_eq!(request.body().as_ptr(), first.as_ptr());
+        assert_eq!(request.json_body().decode::<Name<'_>>().unwrap().name, "ab");
+        assert_eq!(name.name, "ab");
+    }
 }

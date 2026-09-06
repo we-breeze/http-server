@@ -10,6 +10,7 @@ pub enum ResponseBody {
     Empty,
     Static(&'static [u8]),
     Arena(EphemeralBytes),
+    Segmented(brz_io::Reader),
     Owned(bytes::Bytes),
     Stream(crate::stream::ResponseStream),
 }
@@ -22,6 +23,7 @@ impl ResponseBody {
             Self::Empty => Some(0),
             Self::Static(bytes) => Some(bytes.len() as u64),
             Self::Arena(bytes) => Some(bytes.len() as u64),
+            Self::Segmented(reader) => Some(reader.len() as u64),
             Self::Owned(bytes) => Some(bytes.len() as u64),
             Self::Stream(stream) => stream.content_length,
         }
@@ -29,7 +31,7 @@ impl ResponseBody {
 
     pub(crate) fn as_slice(&self) -> &[u8] {
         match self {
-            Self::Empty | Self::Stream(_) => &[],
+            Self::Empty | Self::Stream(_) | Self::Segmented(_) => &[],
             Self::Static(bytes) => bytes,
             Self::Arena(bytes) => bytes.as_ref(),
             Self::Owned(bytes) => bytes.as_ref(),
@@ -124,6 +126,12 @@ impl Response {
     #[must_use]
     pub fn empty(status: StatusCode) -> Self {
         Self::new(status, ResponseBody::Empty)
+    }
+
+    /// Send the unread portion of an arena-backed reader without merging it.
+    #[must_use]
+    pub fn segmented(status: StatusCode, body: brz_io::Reader) -> Self {
+        Self::new(status, ResponseBody::Segmented(body))
     }
 
     #[must_use]

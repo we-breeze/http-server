@@ -275,6 +275,26 @@ fn expand_api(arguments: &ApiArguments, mut input: ItemImpl) -> syn::Result<Toke
             }
         }
     });
+    let metric_paths = groups.iter().map(|group| &group.path);
+    let metric_metadata = groups.iter().map(|group| {
+        let path = &group.path;
+        let methods = group.endpoints.iter().map(|endpoint| endpoint.method);
+        let priority = if path.split('/').any(|segment| segment.starts_with('*')) {
+            0
+        } else {
+            1 << 24
+        } + group.specificity * 1024
+            + path.split('/').count();
+        quote! {
+            if #server::__private::match_route(&__http_decoded, #path).is_some() {
+                static METRICS: ::std::sync::LazyLock<#server::ApiMetrics> =
+                    ::std::sync::LazyLock::new(|| #server::ApiMetrics::new([concat!(#path, "_2xx"), concat!(#path, "_3xx"), concat!(#path, "_4xx"), concat!(#path, "_5xx")]));
+                let candidate = (#priority, *METRICS);
+                if [#(#methods),*].contains(&method) { return Some(candidate); }
+                if fallback.is_none() { fallback = Some(candidate); }
+            }
+        }
+    });
     let allowed_metadata = groups.iter().map(|group| {
         let path = &group.path;
         let methods = group.endpoints.iter().fold(0, |bits, endpoint| bits | method_bit(endpoint.method));
@@ -305,6 +325,17 @@ fn expand_api(arguments: &ApiArguments, mut input: ItemImpl) -> syn::Result<Toke
         #input
 
         #handler_impl {
+            fn register_metrics(&self) {
+                #(let _ = #server::ApiMetrics::new([concat!(#metric_paths, "_2xx"), concat!(#metric_paths, "_3xx"), concat!(#metric_paths, "_4xx"), concat!(#metric_paths, "_5xx")]);)*
+            }
+
+            fn route_metrics(&self, path: &str, method: &str) -> Option<(usize, #server::ApiMetrics)> {
+                let __http_decoded = #server::__private::decode_path(path);
+                let mut fallback = None;
+                #(#metric_metadata)*
+                fallback
+            }
+
             fn route_priority(&self, path: &str, method: &str) -> Option<usize> {
                 let __http_decoded = #server::__private::decode_path(path);
                 #(#route_metadata)*

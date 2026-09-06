@@ -248,10 +248,7 @@ fn expand_body_parameter(
         },
         ParameterSource::BorrowedBody => quote! { let #ident: #ty = __http_request.body(); },
         ParameterSource::JsonBody => quote! {
-            let __http_json = match #server::__private::JsonBody::new(__http_request.body()) {
-                Ok(value) => value,
-                Err(error) => { #failure }
-            };
+            let __http_json = __http_request.json_body();
             let #ident: #ty = match __http_json.decode() {
                 Ok(value) => value,
                 Err(error) => { #failure }

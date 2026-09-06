@@ -33,6 +33,17 @@ pub trait Handler<A = NoAuthenticator>: Send + Sync + 'static
 where
     A: Authenticator,
 {
+    /// Register fixed metrics for exported routes at server startup.
+    #[doc(hidden)]
+    fn register_metrics(&self) {}
+
+    /// Route priority and fixed metrics, including a matched-path 405 fallback.
+    /// Raw request paths must never become metric keys.
+    #[doc(hidden)]
+    fn route_metrics(&self, _path: &str, _method: &str) -> Option<(usize, crate::ApiMetrics)> {
+        None
+    }
+
     /// Static route metadata used to compose macro-exported API groups.
     #[doc(hidden)]
     fn route_priority(&self, _path: &str, _method: &str) -> Option<usize> {
@@ -55,9 +66,9 @@ where
 /// Runtime limits and socket policy for one HTTP server.
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
-    /// Storage used for all arena-backed response heads, dynamic headers, and
-    /// response bodies. Clone the same arena into dependent SDKs at process
-    /// startup when they should share its two chunks.
+    /// Storage for request bodies, response bodies, and generated headers.
+    /// Clone the same arena into dependent SDKs at process startup when they
+    /// should share its two chunks.
     pub arena: EphemeralBytesArena,
     /// Origin policy; absent when the application does not expose cross-origin APIs.
     pub cors: Option<crate::Cors>,
@@ -313,8 +324,10 @@ where
     A: Authenticator,
 {
     config.validate()?;
+    let listener = TcpListener::bind(address).await?;
+    handler.register_metrics();
     Ok(Server {
-        listener: TcpListener::bind(address).await?,
+        listener,
         handler: Arc::new(handler),
         authenticator: Arc::new(authenticator),
         config,
@@ -334,6 +347,7 @@ where
 {
     let mut read_buffer = BytesMut::with_capacity(INITIAL_READ_BUFFER_CAPACITY);
     loop {
+        let mut observation = crate::api_metrics::Observation::new();
         let result = tokio::time::timeout(
             config.request_timeout,
             receive_and_handle(
@@ -343,6 +357,7 @@ where
                 handler.as_ref(),
                 authenticator.as_ref(),
                 &config,
+                &mut observation,
             ),
         )
         .await;
@@ -352,6 +367,7 @@ where
             Ok(Err(RequestFailure::Closed)) => return Ok(()),
             Ok(Err(failure)) => {
                 let response = Response::empty(failure.status()).close();
+                observation.record(response.status());
                 write_response(
                     &mut stream,
                     &config.arena,
@@ -364,6 +380,7 @@ where
             }
             Err(_) => {
                 let response = Response::empty(StatusCode::REQUEST_TIMEOUT).close();
+                observation.record(response.status());
                 write_response(
                     &mut stream,
                     &config.arena,
@@ -376,6 +393,7 @@ where
             }
         };
 
+        observation.record(response.status());
         let close = !request_keep_alive || response.should_close();
         write_response(
             &mut stream,
@@ -399,6 +417,7 @@ async fn receive_and_handle<H, A>(
     handler: &H,
     authenticator: &A,
     config: &ServerConfig,
+    observation: &mut crate::api_metrics::Observation,
 ) -> std::result::Result<(Response, usize, bool), RequestFailure>
 where
     H: Handler<A>,
@@ -406,21 +425,16 @@ where
 {
     let inspection = loop {
         match inspect_request(read_buffer, config)? {
-            Some(inspection) if read_buffer.len() >= inspection.total_len => break inspection,
-            Some(inspection) => {
-                read_more(stream, read_buffer, inspection.total_len).await?;
-            }
+            Some(inspection) => break inspection,
             None => read_more(stream, read_buffer, config.max_request_head_bytes).await?,
         }
     };
 
-    // Parse a second time only after the complete body exists. This preserves
-    // the header array on the stack and keeps request fields borrowed instead
-    // of allocating owned method, path, header, or body values.
+    // Reparse only the head to keep header descriptors on this task's stack.
     let mut header_storage = [httparse::EMPTY_HEADER; MAX_REQUEST_HEADERS];
     let mut parsed = httparse::Request::new(&mut header_storage);
     let httparse::Status::Complete(head_len) = parsed
-        .parse(&read_buffer[..inspection.total_len])
+        .parse(&read_buffer[..inspection.head_len])
         .map_err(map_parse_error)?
     else {
         return Err(RequestFailure::BadRequest);
@@ -428,9 +442,34 @@ where
     debug_assert_eq!(head_len, inspection.head_len);
     let method = parsed.method.ok_or(RequestFailure::BadRequest)?;
     let target = parsed.path.ok_or(RequestFailure::BadRequest)?;
+    let path = target.split_once('?').map_or(target, |(path, _)| path);
+    observation.matched(
+        handler
+            .route_metrics(path, method)
+            .map(|(_, metrics)| metrics),
+    );
+
+    // Keep any pipelined bytes in the header buffer; read exactly this body's
+    // remaining Content-Length into arena segments without growing that buffer.
+    let consumed = read_buffer.len().min(inspection.total_len);
+    // Inspection checks the body limit; the bounded copy preserves its boundary.
+    let mut writer = brz_io::Writer::new(&config.arena);
+    std::io::Write::write_all(&mut writer, &read_buffer[inspection.head_len..consumed])
+        .map_err(RequestFailure::Io)?;
+    let remaining = (inspection.total_len - consumed) as u64;
+    if remaining != 0 {
+        let copied = tokio::io::copy(&mut stream.take(remaining), &mut writer)
+            .await
+            .map_err(RequestFailure::Io)?;
+        if copied != remaining {
+            return Err(RequestFailure::Closed);
+        }
+    }
+    let body = writer.into_reader();
+
     // The descriptors live on this connection task's stack while the handler
-    // awaits. Their names and values still borrow `read_buffer`; neither the
-    // request metadata nor the body causes a heap allocation.
+    // awaits. Their names and values still borrow `read_buffer`, so request
+    // metadata requires no owned strings.
     let mut request_header_storage = [Header {
         name: "",
         value: &[],
@@ -445,7 +484,7 @@ where
         method,
         target,
         &request_header_storage[..parsed.headers.len()],
-        &read_buffer[head_len..inspection.total_len],
+        &body,
         peer_addr,
         &config.arena,
     );
@@ -472,11 +511,11 @@ where
     if response.status().as_u16() > 599 {
         return Ok((
             Response::empty(StatusCode::INTERNAL_SERVER_ERROR).close(),
-            inspection.total_len,
+            consumed,
             false,
         ));
     }
-    Ok((response, inspection.total_len, inspection.keep_alive))
+    Ok((response, consumed, inspection.keep_alive))
 }
 
 fn inspect_request(
@@ -548,9 +587,8 @@ async fn read_more(
     if remaining == 0 {
         return Err(RequestFailure::BadRequest);
     }
-    // BufMut::limit constrains read_buf to the exact protocol limit while
-    // retaining a direct kernel-to-connection-buffer read. No stack staging
-    // buffer and no second input-body copy are introduced here.
+    // Bound header buffering even if a socket read also returns body bytes.
+    // Any buffered body prefix is subsequently copied into arena segments.
     let mut destination = (&mut *read_buffer).limit(remaining);
     let read = stream
         .read_buf(&mut destination)

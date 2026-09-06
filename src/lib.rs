@@ -10,6 +10,7 @@
 //! framework. Chunked request bodies and HTTP/2 are outside the current contract.
 //! API methods may return an owned byte stream for finite downloads.
 
+mod api_metrics;
 mod auth;
 mod body;
 mod cors;
@@ -25,6 +26,9 @@ mod route;
 mod router;
 mod server;
 mod stream;
+
+#[doc(hidden)]
+pub use api_metrics::ApiMetrics;
 
 pub use auth::{AuthFailure, AuthRequest, Authenticated, Authenticator, NoAuthenticator};
 pub use body::{Body, BodyError, Form, Multipart, Upload};
@@ -55,7 +59,6 @@ pub mod __private {
     pub use crate::extract::{
         header_optional, header_required, path, query_many, query_optional, query_required,
     };
-    pub use crate::json::JsonBody;
     pub use crate::json::is_json_content_type;
     pub use crate::json::{json_body, json_response, json_result_response};
     pub use crate::params::{QueryParams, decode_path, query_object};

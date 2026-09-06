@@ -178,3 +178,31 @@ async fn bind_rejects_invalid_limits() {
         "invalid server configuration: max_connections must be greater than zero"
     );
 }
+
+#[tokio::test]
+async fn incomplete_body_never_reaches_the_handler() {
+    let called = Arc::new(AtomicBool::new(false));
+    let server = Server::bind_with_config(
+        "127.0.0.1:0".parse().unwrap(),
+        Echo {
+            response_used_arena: Arc::clone(&called),
+        },
+        ServerConfig::default(),
+    )
+    .await
+    .unwrap();
+    let address = server.local_addr().unwrap();
+    let (shutdown, task) = start_server(server);
+    let mut client = TcpStream::connect(address).await.unwrap();
+    client
+        .write_all(
+            b"POST /echo?request=one HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\n\r\nhel",
+        )
+        .await
+        .unwrap();
+    client.shutdown().await.unwrap();
+    assert!(read_to_close(&mut client).await.is_empty());
+    assert!(!called.load(Ordering::Acquire));
+    shutdown.send(()).unwrap();
+    task.await.unwrap();
+}

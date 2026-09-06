@@ -27,6 +27,31 @@ impl<L, R> Router<L, R> {
 }
 
 impl<A: Authenticator, L: Handler<A>, R: Handler<A>> Handler<A> for Router<L, R> {
+    fn register_metrics(&self) {
+        self.left.register_metrics();
+        self.right.register_metrics();
+    }
+
+    fn route_metrics(&self, path: &str, method: &str) -> Option<(usize, crate::ApiMetrics)> {
+        let left = self.left.route_priority(path, method);
+        let right = self.right.route_priority(path, method);
+        if right > left {
+            self.right.route_metrics(path, method)
+        } else if left.is_some() {
+            self.left.route_metrics(path, method)
+        } else {
+            let left = self.left.route_metrics(path, method);
+            let right = self.right.route_metrics(path, method);
+            if right.as_ref().map(|(priority, _)| priority)
+                > left.as_ref().map(|(priority, _)| priority)
+            {
+                right
+            } else {
+                left
+            }
+        }
+    }
+
     fn route_priority(&self, path: &str, method: &str) -> Option<usize> {
         self.left
             .route_priority(path, method)

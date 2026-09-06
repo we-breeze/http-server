@@ -6,18 +6,26 @@ have different connection ownership, lifecycle, and observability needs.
 
 ## Data path
 
-- Request line, headers, target, query, and a fixed-length body borrow the
-  connection receive buffer. The handler finishes before that buffer is reused.
-- JSON response bodies are written into `EphemeralBytesArena` and held by an
-  `EphemeralBytes` allocation until the socket write completes. Owned bytes
-  and download streams are sent directly from their backing storage.
-- The server writes the generated HTTP head and body with vectored writes; it
-  never concatenates or copies the arena-backed body into another framework
-  buffer.
+- Request line, headers, target, and query borrow the connection's header
+  buffer. Fixed-length bodies are collected into an arena-backed `brz_io::Writer`
+  under `max_request_body_bytes`, then frozen into a segmented `Reader`.
+- JSON parameters use `brz_json::JsonReader` directly over the segments. Strings
+  within one segment borrow it; cross-segment strings and decoded escapes use
+  additional arena storage for that field. No intermediate `serde_json::Value`
+  tree or whole-body merge is needed.
+- `Request::body()` preserves contiguous byte access for raw bodies, forms,
+  and multipart. A cross-segment body is merged once on demand and cached.
+- JSON responses serialize once into a `Writer`, then send its segments with a
+  known `Content-Length`. `Response::segmented` also accepts an existing reader
+  and sends its unread portion. Owned bytes and download streams keep their
+  existing write paths.
 
-The unavoidable kernel-to-user-space receive copy still exists. “Zero-copy”
-here means no additional framework copy for parsed request fields or an
-arena-backed response body.
+The socket receive path includes copying into arena segments. Parsed headers
+and single-segment JSON strings need no extra payload copy; response segments
+are sent without concatenating the complete body.
+
+Dependencies are pinned to `io v0.0.1`, `json v0.0.1`, and `metrics v0.0.2`
+through Git tags.
 
 ## Transport scope
 
@@ -176,11 +184,42 @@ principal. A JWT implementation can use `type Principal = Jwt<User>`, yielding
 the familiar `Authenticated<Jwt<User>>` business parameter without coupling the
 core server to a particular JWT or crypto library.
 
-JSON response encoding counts the exact output size first, then writes directly
-into its final arena allocation. It adds no body copy, though it deliberately
-uses two serialization passes. A borrowed `Deserialize<'a>` DTO can borrow
-unescaped JSON strings from the receive buffer; decoding escaped strings or
-using owned DTO fields may allocate by codec design.
+JSON response encoding uses one serialization pass into arena segments. The
+API macro keeps the JSON reader alive across the business handler's awaits and
+until borrowed response fields have been serialized. Manual handlers can use
+`let json = request.json_body(); let input: Params<'_> = json.decode()?;` with
+`Params` deriving `Deserialize`. Each JSON reader has an independent cursor;
+raw body access remains available after parsing, including on rejection paths.
+
+## API metrics
+
+Exported `#[api]` routes automatically register four `brz-metrics` entries when
+binding the server. Profile output uses type `API` and names based on the full
+route template (including its prefix):
+
+```text
+/users/:id_2xx
+/users/:id_3xx
+/users/:id_4xx
+/users/:id_5xx
+```
+
+Classes cover 200–299, 300–399, 400–499, and 500–599 inclusively. Different IDs
+and query strings share the template's slots; methods on the same template and
+repeated server registrations also share them. Unused classes are registered
+with zero counts. There is no per-request metric-name allocation or registration
+after the route's metric handles have initialized.
+
+Counters record the final response status once, before socket writing. They
+include authentication/extraction rejections, matched-path 405 responses,
+serialization failures, and body/handler timeouts after route identification.
+Latency spans route identification through response construction, with the
+existing service policy (200 ms slow threshold); 4xx and 5xx also increment
+`error_count`. Download completion and socket-write errors are not a second API
+observation. Unknown routes, failures before route identification, and closed
+connections producing no response do not create API entries.
+
+The metrics dependency is pinned to the Git tag `v0.0.2`.
 
 ## Usage
 
@@ -223,3 +262,5 @@ cargo test
 cargo test --features macros
 cargo clippy --all-targets --all-features -- -D warnings
 ```
+
+API 指标的完整名称由宏生成的 `concat!` 在编译时确定；注册时缓存指标句柄，请求处理时不拼接指标名称。
