@@ -276,7 +276,7 @@ async fn macro_serializes_a_business_forbidden_error() {
 async fn custom_authenticator_injects_or_rejects_a_typed_principal() {
     let server = Server::bind_with_authenticator_and_config(
         "127.0.0.1:0".parse().unwrap(),
-        ProtectedApi,
+        http_server::Router::new(ProtectedApi),
         HeaderAuthenticator,
         ServerConfig::new(EphemeralBytesArena::new(1024)),
     )
@@ -355,9 +355,9 @@ async fn segmented_json_borrows_escaped_fields_across_await_and_pipelining() {
     config.max_request_head_bytes = 256;
     let server = Server::bind_with_config(
         "127.0.0.1:0".parse().unwrap(),
-        UserApi {
+        http_server::Router::new(UserApi {
             calls: Arc::clone(&calls),
-        },
+        }),
         config,
     )
     .await
@@ -406,9 +406,9 @@ async fn invalid_segmented_json_is_rejected_without_losing_the_next_request() {
     let calls = Arc::new(AtomicUsize::new(0));
     let server = Server::bind_with_config(
         "127.0.0.1:0".parse().unwrap(),
-        UserApi {
+        http_server::Router::new(UserApi {
             calls: Arc::clone(&calls),
-        },
+        }),
         ServerConfig::new(EphemeralBytesArena::new(3)),
     )
     .await

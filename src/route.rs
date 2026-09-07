@@ -6,6 +6,17 @@ pub struct RouteMatch<'a> {
 }
 
 impl<'a> RouteMatch<'a> {
+    pub(crate) fn from_ranges(path: &'a str, ranges: &[(usize, usize)]) -> Self {
+        let mut captures = [None; 8];
+        for (slot, &(start, end)) in captures.iter_mut().zip(ranges) {
+            *slot = Some(&path[start..end]);
+        }
+        Self {
+            captures,
+            len: ranges.len(),
+        }
+    }
+
     #[must_use]
     pub fn capture(&self, index: usize) -> Option<&'a str> {
         (index < self.len).then(|| self.captures[index]).flatten()

@@ -11,7 +11,7 @@ use syn::{
 };
 
 mod generate;
-use generate::expand_group;
+use generate::{expand_dispatch, expand_group};
 
 pub(crate) fn expand(arguments: TokenStream, input: TokenStream) -> TokenStream {
     let arguments = parse_macro_input!(arguments as ApiArguments);
@@ -26,6 +26,7 @@ struct ApiArguments {
     consumes: Codec,
     produces: Codec,
     auth: AuthMode,
+    registry: Option<syn::Path>,
 }
 
 impl Parse for ApiArguments {
@@ -34,10 +35,38 @@ impl Parse for ApiArguments {
         let mut consumes = Codec::Json;
         let mut produces = Codec::Json;
         let mut auth = AuthMode::None;
+        let mut registry = None;
         while !input.is_empty() {
             let name: Ident = input.parse()?;
+            if name == "register" {
+                if registry.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        name,
+                        "specify register, group, or registry only once",
+                    ));
+                }
+                registry = Some(syn::parse_quote!(crate::http_apis));
+                if input.is_empty() {
+                    break;
+                }
+                input.parse::<Token![,]>()?;
+                continue;
+            }
             input.parse::<Token![=]>()?;
-            if name == "prefix" {
+            if name == "registry" || name == "group" {
+                if registry.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        name,
+                        "specify register, group, or registry only once",
+                    ));
+                }
+                let path = input.parse()?;
+                registry = Some(if name == "group" {
+                    crate::registry::group_path(path)
+                } else {
+                    path
+                });
+            } else if name == "prefix" {
                 prefix = input.parse::<LitStr>()?.value();
             } else if name == "consumes" {
                 consumes = input.parse()?;
@@ -48,7 +77,7 @@ impl Parse for ApiArguments {
             } else {
                 return Err(syn::Error::new_spanned(
                     name,
-                    "supported api options are prefix, consumes, produces, and auth",
+                    "supported api options are prefix, consumes, produces, auth, register, group, and registry",
                 ));
             }
             if input.is_empty() {
@@ -62,6 +91,7 @@ impl Parse for ApiArguments {
             consumes,
             produces,
             auth,
+            registry,
         })
     }
 }
@@ -275,6 +305,28 @@ fn expand_api(arguments: &ApiArguments, mut input: ItemImpl) -> syn::Result<Toke
             }
         }
     });
+    let dispatch_arms = groups
+        .iter()
+        .enumerate()
+        .map(|(id, group)| expand_dispatch(group, id, &server));
+    let descriptors: Vec<_> = groups.iter().map(|group| {
+        let path = &group.path;
+        let methods = group.endpoints.iter().fold(0u16, |bits, endpoint| bits | method_bit(endpoint.method));
+        let priority = if path.split('/').any(|segment| segment.starts_with('*')) { 0 } else { 1 << 24 }
+            + group.specificity * 1024 + path.split('/').count();
+        quote! {
+            #server::__private::RouteDescriptor {
+                path: #path,
+                methods: #methods,
+                priority: #priority,
+                metrics: || {
+                    static METRICS: ::std::sync::LazyLock<#server::ApiMetrics> =
+                        ::std::sync::LazyLock::new(|| #server::ApiMetrics::new([concat!(#path, "_2xx"), concat!(#path, "_3xx"), concat!(#path, "_4xx"), concat!(#path, "_5xx")]));
+                    *METRICS
+                },
+            }
+        }
+    }).collect();
     let metric_paths = groups.iter().map(|group| &group.path);
     let metric_metadata = groups.iter().map(|group| {
         let path = &group.path;
@@ -320,11 +372,39 @@ fn expand_api(arguments: &ApiArguments, mut input: ItemImpl) -> syn::Result<Toke
     }
     let (impl_generics, _, where_clause) = generics.split_for_impl();
     let handler_impl = quote! { impl #impl_generics #server::Handler<__HttpAuthenticator> for #self_ty #where_clause };
+    let registration = arguments
+        .registry
+        .as_ref()
+        .map(|registry| crate::registry::registration(registry, &input, &server, &descriptors))
+        .transpose()?;
 
     Ok(quote! {
         #input
+        #registration
 
         #handler_impl {
+            fn routes(&self) -> &'static [#server::__private::RouteDescriptor] {
+                const ROUTES: &[#server::__private::RouteDescriptor] = &[#(#descriptors),*];
+                ROUTES
+            }
+
+            fn call_route<'a>(
+                &'a self,
+                __http_request: #server::Request<'a>,
+                __http_authenticator: &'a __HttpAuthenticator,
+                __http_route: usize,
+                __http_match: #server::__private::RouteMatch<'a>,
+            ) -> impl ::core::future::Future<Output = #server::Response> + Send + 'a {
+                async move {
+                    let __http_query = #server::__private::QueryParams::new(__http_request.query());
+                    match __http_route {
+                        #(#dispatch_arms,)*
+                        _ => {},
+                    }
+                    #server::__private::unmatched(0, __http_request.response_arena())
+                }
+            }
+
             fn register_metrics(&self) {
                 #(let _ = #server::ApiMetrics::new([concat!(#metric_paths, "_2xx"), concat!(#metric_paths, "_3xx"), concat!(#metric_paths, "_4xx"), concat!(#metric_paths, "_5xx")]);)*
             }
@@ -866,7 +946,7 @@ fn route_shape(path: &str) -> String {
         .join("/")
 }
 
-fn server_crate_path() -> TokenStream2 {
+pub(crate) fn server_crate_path() -> TokenStream2 {
     match crate_name("http-server") {
         Ok(FoundCrate::Itself) => quote!(crate),
         Ok(FoundCrate::Name(name)) => {

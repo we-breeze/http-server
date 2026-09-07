@@ -9,7 +9,34 @@ pub(super) fn expand_group(group: &RouteGroup, server: &TokenStream2) -> TokenSt
         .endpoints
         .iter()
         .fold(0, |bits, endpoint| bits | method_bit(endpoint.method));
-    let method_arms = group.endpoints.iter().map(|endpoint| {
+    let method_arms = method_arms(group, server);
+    quote! {
+        if let Some(__http_match) = #server::__private::match_route(__http_path, #path) {
+            __http_allow |= #methods;
+            match __http_method {
+                #(#method_arms,)*
+                _ => {},
+            }
+        }
+    }
+}
+
+pub(super) fn expand_dispatch(
+    group: &RouteGroup,
+    id: usize,
+    server: &TokenStream2,
+) -> TokenStream2 {
+    let arms = method_arms(group, server);
+    quote! {
+        #id => match __http_request.method() {
+            #(#arms,)*
+            _ => {},
+        }
+    }
+}
+
+fn method_arms(group: &RouteGroup, server: &TokenStream2) -> Vec<TokenStream2> {
+    group.endpoints.iter().map(|endpoint| {
         let method = LitStr::new(endpoint.method, proc_macro2::Span::call_site());
         let bindings = endpoint
             .parameters
@@ -43,18 +70,8 @@ pub(super) fn expand_group(group: &RouteGroup, server: &TokenStream2) -> TokenSt
                 return #response;
             }
         }
-    });
-    quote! {
-        if let Some(__http_match) = #server::__private::match_route(__http_path, #path) {
-            __http_allow |= #methods;
-            match __http_method {
-                #(#method_arms,)*
-                _ => {},
-            }
-        }
-    }
+    }).collect()
 }
-
 fn expand_authentication(endpoint: &Endpoint, server: &TokenStream2) -> TokenStream2 {
     let authentication_parameter = endpoint
         .parameters

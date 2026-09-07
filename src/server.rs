@@ -56,6 +56,49 @@ where
         0
     }
 
+    /// Static templates and method groups exported by the API macro.
+    #[doc(hidden)]
+    fn routes(&self) -> &'static [crate::__private::RouteDescriptor] {
+        &[]
+    }
+
+    /// Adds an API, or flattens an existing router, into a listener's routes.
+    #[doc(hidden)]
+    fn append_to(self, router: &mut crate::Router<A>)
+    where
+        Self: Sized,
+    {
+        router.push(self);
+    }
+
+    /// Resolve before reading the body so timeouts retain route metrics.
+    #[doc(hidden)]
+    fn prepare<'p>(&self, path: &'p str, method: &str) -> crate::__private::PreparedRoute<'p> {
+        crate::__private::PreparedRoute::legacy(path, self.route_metrics(path, method))
+    }
+
+    #[doc(hidden)]
+    fn call_prepared<'a>(
+        &'a self,
+        request: Request<'a>,
+        authenticator: &'a A,
+        _prepared: &'a crate::__private::PreparedRoute<'_>,
+    ) -> impl Future<Output = Response> + Send + 'a {
+        self.call(request, authenticator)
+    }
+
+    /// Dispatch an already matched API group without searching its templates.
+    #[doc(hidden)]
+    fn call_route<'a>(
+        &'a self,
+        request: Request<'a>,
+        authenticator: &'a A,
+        _route: usize,
+        _captures: crate::__private::RouteMatch<'a>,
+    ) -> impl Future<Output = Response> + Send + 'a {
+        self.call(request, authenticator)
+    }
+
     fn call<'a>(
         &'a self,
         request: Request<'a>,
@@ -443,11 +486,8 @@ where
     let method = parsed.method.ok_or(RequestFailure::BadRequest)?;
     let target = parsed.path.ok_or(RequestFailure::BadRequest)?;
     let path = target.split_once('?').map_or(target, |(path, _)| path);
-    observation.matched(
-        handler
-            .route_metrics(path, method)
-            .map(|(_, metrics)| metrics),
-    );
+    let prepared = handler.prepare(path, method);
+    observation.matched(prepared.metrics());
 
     // Keep any pipelined bytes in the header buffer; read exactly this body's
     // remaining Content-Length into arena segments without growing that buffer.
@@ -497,7 +537,9 @@ where
     let mut response = if let Some(response) = preflight {
         response
     } else {
-        let response = handler.call(request, authenticator).await;
+        let response = handler
+            .call_prepared(request, authenticator, &prepared)
+            .await;
         if let Some(cors) = &config.cors {
             cors.apply(cors_origin, response, &config.arena)
         } else {

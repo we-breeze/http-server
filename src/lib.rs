@@ -18,6 +18,8 @@ mod error;
 mod extract;
 mod json;
 mod params;
+#[cfg(feature = "macros")]
+mod registry;
 mod rejection;
 mod reply;
 mod request;
@@ -49,7 +51,12 @@ pub use server::{Handler, Server, ServerConfig};
 pub use stream::ResponseStream;
 
 #[cfg(feature = "macros")]
-pub use http_server_macros::{api, delete, get, head, options, patch, post, put};
+pub use http_server_macros::{
+    api, delete, get, handlers, head, options, patch, post, put, registry,
+};
+
+#[cfg(feature = "macros")]
+pub use registry::{FromState, RegistryError};
 
 /// Implementation details used by `#[http_server::api]` generated code.
 #[doc(hidden)]
@@ -62,8 +69,13 @@ pub mod __private {
     pub use crate::json::is_json_content_type;
     pub use crate::json::{json_body, json_response, json_result_response};
     pub use crate::params::{QueryParams, decode_path, query_object};
+    #[cfg(feature = "macros")]
+    pub use crate::registry::{ApiRegistration, collect};
     pub use crate::reply::kind;
     pub use crate::reply::{response, result_response};
-    pub use crate::route::match_route;
+    pub use crate::route::{RouteMatch, match_route};
     pub use crate::router::unmatched;
+    pub use crate::router::{PreparedRoute, RouteDescriptor};
+    #[cfg(feature = "macros")]
+    pub use inventory;
 }
