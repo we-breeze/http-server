@@ -38,11 +38,13 @@ SSE-specific behavior, and WebSockets remain outside this release.
 ## API macros
 
 Enable the `macros` feature and define APIs in business terms. `Request` stays
-inside generated transport code.
+inside generated transport code. `#[api]` registers in the default group;
+declare the group as shown under **Composing API groups**. The standalone
+examples use `register = false` for manually constructed handlers.
 
 ```toml
 [dependencies]
-http-server = { git = "https://github.com/we-breeze/http-server.git", tag = "v0.0.2", features = ["macros"] }
+http-server = { git = "https://github.com/we-breeze/http-server.git", tag = "v0.0.5", features = ["macros"] }
 serde = { version = "1", features = ["derive"] }
 ```
 
@@ -68,7 +70,7 @@ struct UserView<'a> {
 
 struct UserApi;
 
-#[api(prefix = "/v1/users")]
+#[api(prefix = "/v1/users", register = false)]
 impl UserApi {
     #[http_server::get("/:id")]
     async fn get(&self, id: u64, verbose: Option<bool>) -> UserView<'static> {
@@ -107,6 +109,119 @@ Business failures return `ApiResult<T>`. For example,
 `Err(ApiError::forbidden("not permitted"))` produces a JSON `403 Forbidden`
 response. Use `403` only after authentication identified the caller; missing
 or invalid authentication belongs to `401 Unauthorized`.
+
+## Composing API groups
+
+Declare a group once in the application crate root, and register each API
+beside its methods. `FromState<S>` constructs API instances from the group's
+state type; it can retain shared state or select API-specific dependencies.
+
+```rust,no_run
+use std::sync::Arc;
+use http_server::{FromState, api};
+
+struct AppState {
+    service_name: String,
+}
+
+http_server::registry!(state = Arc<AppState>);
+
+struct InfoApi {
+    state: Arc<AppState>,
+}
+
+impl FromState<Arc<AppState>> for InfoApi {
+    fn from_state(state: &Arc<AppState>) -> Self {
+        Self { state: Arc::clone(state) }
+    }
+}
+
+#[api(prefix = "/info")]
+impl InfoApi {
+    #[http_server::get("/name")]
+    async fn name(&self) -> String {
+        self.state.service_name.clone()
+    }
+}
+
+async fn bind() -> Result<(), Box<dyn std::error::Error>> {
+    let state = Arc::new(AppState { service_name: "example".into() });
+    let handler = http_server::handlers!(state)?;
+    let _server = http_server::Server::bind("127.0.0.1:8080".parse()?, handler).await?;
+    Ok(())
+}
+```
+
+Use normal Rust `mod` declarations to include API modules. `#[api]` enrolls
+the API in the default group, `crate::http_apis`; it does not search source
+files. Use `register = false` to opt out. Each group uses one concrete state
+and authenticator type. For an authenticated listener,
+declare `registry!(state = Arc<AppState>, auth = AppAuth)` and pass the
+`AppAuth` instance to `Server::bind_with_authenticator`.
+
+`AppState` is an example name and can live in any module. The declared state
+type must match `FromState<S>`; API fields need neither a prescribed name nor
+public visibility.
+
+To bind a second group on another address, name the group on the API and pass
+that name as the second argument to `handlers!`. Groups can use different
+authenticator types. This example keeps the public default group above and
+adds an authenticated admin listener:
+
+```rust,ignore
+http_server::registry!(group = admin, state = Arc<AppState>, auth = AdminAuth);
+
+#[http_server::api(prefix = "/admin", group = admin, auth = required)]
+impl AdminApi {
+    // Annotated methods; AdminApi implements FromState<Arc<AppState>>.
+}
+
+let public_server = http_server::Server::bind(
+    "0.0.0.0:8080".parse()?,
+    http_server::handlers!(state)?,
+).await?;
+let admin_server = http_server::Server::bind_with_authenticator(
+    "127.0.0.1:9090".parse()?,
+    http_server::handlers!(state, admin)?,
+    admin_auth,
+).await?;
+```
+
+The short group name resolves from the crate root. For a group declared in a
+nested module, use the same explicit path in both places:
+`#[api(group = crate::listeners::admin)]` and
+`handlers!(state, crate::listeners::admin)?`. Serve both listeners under the
+application's shutdown lifecycle.
+
+`handlers!` returns `Result<Router<A>, RegistryError>`. It constructs APIs once
+at startup and rejects equal-priority routes whose paths and methods overlap;
+registration order does not choose between conflicting handlers. Initialize
+fallible or asynchronous dependencies before calling it. Generic implementations
+need concrete specialization to register; use `register = false` when
+constructing and merging generic API instances manually.
+
+`#[api(register = false)]` types are explicitly composable without a group
+declaration or `FromState` implementation. A collected group can be merged
+with a manually constructed readiness API that uses `register = false`:
+
+```rust,ignore
+let handler = http_server::Router::new(readiness_api)
+    .merge(http_server::handlers!(state)?);
+```
+
+`Router<A>` has a fixed type for each authenticator, regardless of how many API
+instances are merged. Each API retains its own state type. Merging routers
+flattens their entries. Do not manually merge an API that is also registered.
+
+At startup, static paths are bucketed by byte length and parameter paths by
+segment count; catch-all routes are handled separately. The server selects the
+route once before reading the body, shares that selection with metrics, and
+invokes the selected API group directly. The composition boundary boxes the
+selected handler Future once per invocation. A standalone macro API retains
+static dispatch without that adapter.
+
+See [the router design](docs/router-buckets.md) for matching compatibility,
+index layout, allocation tradeoffs and validation.
 
 ## Authentication
 
@@ -161,7 +276,7 @@ struct HealthView {
 
 struct UserApi;
 
-#[api(prefix = "/v1/users", auth = required)]
+#[api(prefix = "/v1/users", auth = required, register = false)]
 impl UserApi {
     #[http_server::get("/:id")]
     async fn get(&self, id: u64, actor: Authenticated<Actor>) -> UserView {

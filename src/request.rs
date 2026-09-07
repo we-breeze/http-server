@@ -52,7 +52,7 @@ impl<'a> Request<'a> {
 
     /// The path portion of [`Request::target`].
     #[must_use]
-    pub fn path(&self) -> &str {
+    pub fn path(&self) -> &'a str {
         self.target
             .split_once('?')
             .map_or(self.target, |(path, _)| path)

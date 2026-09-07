@@ -26,7 +26,7 @@ async fn request(handler: impl Handler, request: &str) -> Vec<u8> {
     out
 }
 struct Login;
-#[api]
+#[api(register = false)]
 impl Login {
     #[http_server::get("/callback")]
     async fn callback(&self, redirect: &str) -> Redirect {
@@ -54,7 +54,7 @@ async fn redirect_encodes_source_error_message() {
     );
 }
 struct Reads;
-#[api]
+#[api(register = false)]
 impl Reads {
     #[http_server::get("/items")]
     async fn list(&self) -> u64 {
@@ -62,7 +62,7 @@ impl Reads {
     }
 }
 struct Writes;
-#[api]
+#[api(register = false)]
 impl Writes {
     #[http_server::post("/items")]
     async fn create(&self) -> u64 {
@@ -83,7 +83,7 @@ async fn merged_same_path_routes_by_method() {
 type HttpStatus = http::StatusCode;
 type FailedPayload = (HttpStatus, std::collections::HashMap<Vec<u8>, i64>);
 struct Serialization;
-#[api]
+#[api(register = false)]
 impl Serialization {
     #[http_server::get("/invalid")]
     async fn invalid(&self) -> FailedPayload {

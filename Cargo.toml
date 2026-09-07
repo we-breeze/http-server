@@ -22,6 +22,7 @@ http = "1"
 httparse = "1"
 http-server-macros = { path = "macros", version = "0.1.0", optional = true }
 itoa = "1"
+inventory = { version = "0.3", optional = true }
 multer = "3"
 percent-encoding = "2"
 serde = { version = "1", features = ["derive"] }
@@ -36,7 +37,7 @@ tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-threa
 
 [features]
 default = []
-macros = ["dep:http-server-macros"]
+macros = ["dep:http-server-macros", "dep:inventory"]
 
 [lints.rust]
 unsafe_code = "forbid"
@@ -44,3 +45,8 @@ unsafe_code = "forbid"
 [lints.clippy]
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
+
+[[bench]]
+name = "router"
+harness = false
+required-features = ["macros"]
