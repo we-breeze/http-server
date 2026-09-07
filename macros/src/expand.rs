@@ -961,12 +961,11 @@ fn route_shape(path: &str) -> String {
 
 pub(crate) fn server_crate_path() -> TokenStream2 {
     match crate_name("http-server") {
-        Ok(FoundCrate::Itself) => quote!(crate),
         Ok(FoundCrate::Name(name)) => {
             let ident = Ident::new(&name.replace('-', "_"), proc_macro2::Span::call_site());
             quote!(::#ident)
         }
-        Err(_) => quote!(::http_server),
+        Ok(FoundCrate::Itself) | Err(_) => quote!(::http_server),
     }
 }
 
