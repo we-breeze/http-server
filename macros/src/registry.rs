@@ -141,7 +141,7 @@ pub(crate) fn registration(
     if !input.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
             &input.generics,
-            "automatic registration requires a concrete API type; use a concrete impl or merge a generic API instance manually",
+            "automatic registration requires a concrete API type; use a concrete impl or set register = false and merge a generic API instance manually",
         ));
     }
     let self_ty = &input.self_ty;

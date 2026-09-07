@@ -16,7 +16,7 @@ use tokio::net::TcpStream;
 use tokio::sync::{Notify, oneshot};
 
 struct Downloads;
-#[api]
+#[api(register = false)]
 impl Downloads {
     #[http_server::get("/file")]
     async fn file(&self) -> impl Stream<Item = Result<Bytes, Infallible>> + Send + 'static {

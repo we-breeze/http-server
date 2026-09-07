@@ -66,7 +66,7 @@ struct HealthView {
 
 struct ProtectedApi;
 
-#[api(prefix = "/private", auth = required)]
+#[api(prefix = "/private", auth = required, register = false)]
 impl ProtectedApi {
     #[http_server::get("/:id")]
     async fn get(&self, id: u64, auth: Authenticated<Actor>) -> PrivateView {
@@ -92,7 +92,7 @@ impl ProtectedApi {
     }
 }
 
-#[api(prefix = "/v1/users")]
+#[api(prefix = "/v1/users", register = false)]
 impl UserApi {
     #[http_server::get("/:id")]
     async fn get(&self, id: u64, verbose: Option<bool>) -> UserView<'static> {

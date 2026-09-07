@@ -18,7 +18,7 @@ use tokio::{
 };
 
 struct StaticApi;
-#[api]
+#[api(register = false)]
 impl StaticApi {
     #[http_server::get("/users/byname")]
     async fn byname(&self) -> Text {
@@ -27,7 +27,7 @@ impl StaticApi {
 }
 
 struct ParameterApi;
-#[api]
+#[api(register = false)]
 impl ParameterApi {
     #[http_server::get("/users/:id")]
     async fn read(&self, id: &str) -> Text {
@@ -41,7 +41,7 @@ impl ParameterApi {
 }
 
 struct WildcardApi;
-#[api]
+#[api(register = false)]
 impl WildcardApi {
     #[http_server::put("/users/*rest")]
     async fn rest(&self, rest: &str) -> Text {
@@ -50,7 +50,7 @@ impl WildcardApi {
 }
 
 struct Shard<const N: usize>;
-#[api]
+#[api(register = false)]
 impl<const N: usize> Shard<N> {
     #[http_server::get("/shard")]
     async fn read(&self) -> usize {
@@ -215,7 +215,7 @@ impl Authenticator for Auth {
 struct PrivateApi {
     value: &'static str,
 }
-#[api(auth = required)]
+#[api(auth = required, register = false)]
 impl PrivateApi {
     #[http_server::get("/private")]
     async fn private(&self, actor: Authenticated<Principal>) -> Text {

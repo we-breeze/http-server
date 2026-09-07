@@ -38,11 +38,13 @@ SSE-specific behavior, and WebSockets remain outside this release.
 ## API macros
 
 Enable the `macros` feature and define APIs in business terms. `Request` stays
-inside generated transport code.
+inside generated transport code. `#[api]` registers in the default group;
+declare the group as shown under **Composing API groups**. The standalone
+examples use `register = false` for manually constructed handlers.
 
 ```toml
 [dependencies]
-http-server = { git = "https://github.com/we-breeze/http-server.git", tag = "v0.0.4", features = ["macros"] }
+http-server = { git = "https://github.com/we-breeze/http-server.git", tag = "v0.0.5", features = ["macros"] }
 serde = { version = "1", features = ["derive"] }
 ```
 
@@ -68,7 +70,7 @@ struct UserView<'a> {
 
 struct UserApi;
 
-#[api(prefix = "/v1/users")]
+#[api(prefix = "/v1/users", register = false)]
 impl UserApi {
     #[http_server::get("/:id")]
     async fn get(&self, id: u64, verbose: Option<bool>) -> UserView<'static> {
@@ -134,7 +136,7 @@ impl FromState<Arc<AppState>> for InfoApi {
     }
 }
 
-#[api(prefix = "/info", register)]
+#[api(prefix = "/info")]
 impl InfoApi {
     #[http_server::get("/name")]
     async fn name(&self) -> String {
@@ -150,11 +152,16 @@ async fn bind() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Use normal Rust `mod` declarations to include API modules. `register` enrolls
+Use normal Rust `mod` declarations to include API modules. `#[api]` enrolls
 the API in the default group, `crate::http_apis`; it does not search source
-files. Each group uses one concrete state and authenticator type. For an authenticated listener,
+files. Use `register = false` to opt out. Each group uses one concrete state
+and authenticator type. For an authenticated listener,
 declare `registry!(state = Arc<AppState>, auth = AppAuth)` and pass the
 `AppAuth` instance to `Server::bind_with_authenticator`.
+
+`AppState` is an example name and can live in any module. The declared state
+type must match `FromState<S>`; API fields need neither a prescribed name nor
+public visibility.
 
 To bind a second group on another address, name the group on the API and pass
 that name as the second argument to `handlers!`. Groups can use different
@@ -190,10 +197,12 @@ application's shutdown lifecycle.
 at startup and rejects equal-priority routes whose paths and methods overlap;
 registration order does not choose between conflicting handlers. Initialize
 fallible or asynchronous dependencies before calling it. Generic implementations
-need concrete specialization to register.
+need concrete specialization to register; use `register = false` when
+constructing and merging generic API instances manually.
 
-Plain `#[api]` types remain explicitly composable, and registered groups
-can be merged with an existing readiness API or a manually constructed API:
+`#[api(register = false)]` types are explicitly composable without a group
+declaration or `FromState` implementation. A collected group can be merged
+with a manually constructed readiness API that uses `register = false`:
 
 ```rust,ignore
 let handler = http_server::Router::new(readiness_api)
@@ -267,7 +276,7 @@ struct HealthView {
 
 struct UserApi;
 
-#[api(prefix = "/v1/users", auth = required)]
+#[api(prefix = "/v1/users", auth = required, register = false)]
 impl UserApi {
     #[http_server::get("/:id")]
     async fn get(&self, id: u64, actor: Authenticated<Actor>) -> UserView {

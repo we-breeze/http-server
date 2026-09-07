@@ -17,6 +17,10 @@ pub fn handlers(input: TokenStream) -> TokenStream {
 }
 
 /// Generates the internal `Handler` implementation for one business API type.
+///
+/// APIs register in the default group unless `group` selects another group or
+/// `register = false` opts out. Registered APIs implement `FromState` for the
+/// group's state type.
 #[proc_macro_attribute]
 pub fn api(arguments: TokenStream, input: TokenStream) -> TokenStream {
     expand::expand(arguments, input)

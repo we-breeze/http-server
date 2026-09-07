@@ -36,16 +36,19 @@ impl Parse for ApiArguments {
         let mut produces = Codec::Json;
         let mut auth = AuthMode::None;
         let mut registry = None;
+        let mut register = None;
         while !input.is_empty() {
             let name: Ident = input.parse()?;
             if name == "register" {
-                if registry.is_some() {
-                    return Err(syn::Error::new_spanned(
-                        name,
-                        "specify register, group, or registry only once",
-                    ));
+                if register.is_some() {
+                    return Err(syn::Error::new_spanned(name, "specify register only once"));
                 }
-                registry = Some(syn::parse_quote!(crate::http_apis));
+                register = Some(if input.peek(Token![=]) {
+                    input.parse::<Token![=]>()?;
+                    input.parse::<syn::LitBool>()?.value
+                } else {
+                    true
+                });
                 if input.is_empty() {
                     break;
                 }
@@ -57,7 +60,7 @@ impl Parse for ApiArguments {
                 if registry.is_some() {
                     return Err(syn::Error::new_spanned(
                         name,
-                        "specify register, group, or registry only once",
+                        "specify group or registry only once",
                     ));
                 }
                 let path = input.parse()?;
@@ -85,6 +88,16 @@ impl Parse for ApiArguments {
             }
             input.parse::<Token![,]>()?;
         }
+        let registry = match (register, registry) {
+            (Some(false), Some(path)) => {
+                return Err(syn::Error::new_spanned(
+                    path,
+                    "register = false cannot be combined with group or registry",
+                ));
+            }
+            (Some(false), None) => None,
+            (_, path) => Some(path.unwrap_or_else(|| syn::parse_quote!(crate::http_apis))),
+        };
         validate_prefix(&prefix, input.span())?;
         Ok(Self {
             prefix: normalize_prefix(prefix),
@@ -1016,4 +1029,63 @@ fn method_bit(method: &str) -> u16 {
         .iter()
         .position(|known| *known == method)
         .map_or(0, |index| 1 << index)
+}
+
+#[cfg(test)]
+mod registration_tests {
+    use super::ApiArguments;
+    use quote::ToTokens;
+
+    fn group(arguments: &str) -> syn::Result<Option<String>> {
+        Ok(syn::parse_str::<ApiArguments>(arguments)?
+            .registry
+            .map(|path| path.to_token_stream().to_string()))
+    }
+
+    #[test]
+    fn defaults_to_registration_and_allows_explicit_opt_out() {
+        for arguments in ["", "prefix = \"/fixture\"", "register", "register = true"] {
+            assert_eq!(
+                group(arguments).unwrap().as_deref(),
+                Some("crate :: http_apis")
+            );
+        }
+        for arguments in [
+            "register = false",
+            "prefix = \"/fixture\", register = false,",
+        ] {
+            assert!(group(arguments).unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn named_groups_can_explicitly_enable_registration_in_either_order() {
+        for arguments in [
+            "group = admin",
+            "register = true, group = admin",
+            "group = admin, register = true",
+            "register, group = admin",
+            "registry = crate::admin",
+        ] {
+            assert_eq!(group(arguments).unwrap().as_deref(), Some("crate :: admin"));
+        }
+    }
+
+    #[test]
+    fn rejects_disabled_named_groups_and_repeated_or_non_boolean_flags() {
+        for arguments in [
+            "register = false, group = admin",
+            "group = admin, register = false",
+            "register = false, registry = crate::admin",
+            "register, register = false",
+            "register = false, register = true",
+            "group = admin, registry = crate::admin",
+            "register = \"false\"",
+        ] {
+            assert!(
+                group(arguments).is_err(),
+                "accepted contradictory arguments: {arguments}"
+            );
+        }
+    }
 }

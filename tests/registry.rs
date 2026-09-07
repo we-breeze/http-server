@@ -42,9 +42,9 @@ mod parcels {
         }
     }
 
-    #[api(prefix = "/fixture", register)]
+    #[api]
     impl ParcelApi {
-        #[http_server::get("/parcels/:parcel")]
+        #[http_server::get("/fixture/parcels/:parcel")]
         async fn read(&self, parcel: &str) -> Text {
             tokio::task::yield_now().await;
             Text(format!("{}:parcel:{parcel}", self.0.label))
@@ -70,7 +70,7 @@ mod lanterns {
         }
     }
 
-    #[api(prefix = "/fixture", register)]
+    #[api(prefix = "/fixture")]
     impl LanternApi {
         #[http_server::get("/lanterns/:lantern")]
         async fn read(&self, lantern: u64) -> Text {
@@ -81,7 +81,7 @@ mod lanterns {
 
 struct ManualOnly;
 
-#[api]
+#[api(register = false)]
 impl ManualOnly {
     #[http_server::get("/fixture/manual")]
     async fn read(&self) -> Text {
@@ -92,7 +92,7 @@ impl ManualOnly {
 // Disabled declarations must not register constructors or require a state
 // conversion (or even resolve the absent type).
 #[cfg(any())]
-#[api(register)]
+#[api]
 impl UnavailableApi {
     #[http_server::get("/fixture/disabled")]
     async fn read(&self) -> MissingResponse {
@@ -100,7 +100,7 @@ impl UnavailableApi {
     }
 }
 
-#[api(register)]
+#[api]
 #[cfg(any())]
 impl UnavailableAfterApi {
     #[http_server::get("/fixture/disabled-after")]
@@ -109,7 +109,7 @@ impl UnavailableAfterApi {
     }
 }
 
-#[api(register)]
+#[api]
 #[cfg_attr(all(), cfg(any()))]
 impl UnavailableConditionalApi {
     #[http_server::get("/fixture/disabled-conditional")]

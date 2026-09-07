@@ -12,7 +12,7 @@ use tokio::sync::oneshot;
 
 struct StatusApi;
 
-#[api(prefix = "/metric-test")]
+#[api(prefix = "/metric-test", register = false)]
 impl StatusApi {
     #[http_server::get("/:code")]
     async fn status(&self, code: u16) -> Response {
@@ -42,7 +42,7 @@ impl StatusApi {
 
 struct StaticApi;
 
-#[api(prefix = "/metric-test")]
+#[api(prefix = "/metric-test", register = false)]
 impl StaticApi {
     #[http_server::get("/special")]
     async fn special(&self) -> StatusCode {

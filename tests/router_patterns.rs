@@ -21,7 +21,7 @@ macro_rules! fixture_api {
     ($name:ident, $marker:literal, $prefix:literal, $path:literal, $parameter:ident: $ty:ty) => {
         struct $name(Arc<AtomicUsize>);
 
-        #[api(prefix = $prefix)]
+        #[api(prefix = $prefix, register = false)]
         impl $name {
             #[http_server::get($path)]
             async fn read(&self, $parameter: $ty) -> (usize, String) {
@@ -236,7 +236,7 @@ async fn malformed_shapes_and_wrong_methods_never_invoke_business_handlers() {
 }
 
 struct StaticNeighbors;
-#[api(prefix = "/svc")]
+#[api(prefix = "/svc", register = false)]
 impl StaticNeighbors {
     #[http_server::get("/jobs/search")]
     async fn search(&self) -> &'static str {
