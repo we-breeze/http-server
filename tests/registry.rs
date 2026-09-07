@@ -126,12 +126,9 @@ mod northern {
 
     http_server::registry!(state = State, auth = Auth);
 
-    struct Api<const N: usize>(State);
-
-    impl FromState<State> for Api<7> {
-        fn from_state(state: &State) -> Self {
-            Self(state)
-        }
+    #[derive(FromState)]
+    struct Api<const N: usize> {
+        state: State,
     }
 
     // A concrete specialization can register without a generic factory.
@@ -139,7 +136,7 @@ mod northern {
     impl Api<7> {
         #[http_server::get("/fixture/nested")]
         async fn read(&self) -> Text {
-            Text(format!("north:7:{}", self.0))
+            Text(format!("north:7:{}", self.state))
         }
     }
 }

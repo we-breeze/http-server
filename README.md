@@ -44,7 +44,7 @@ examples use `register = false` for manually constructed handlers.
 
 ```toml
 [dependencies]
-http-server = { git = "https://github.com/we-breeze/http-server.git", tag = "v0.0.5", features = ["macros"] }
+http-server = { git = "https://github.com/we-breeze/http-server.git", tag = "v0.0.6", features = ["macros"] }
 serde = { version = "1", features = ["derive"] }
 ```
 
@@ -118,7 +118,7 @@ state type; it can retain shared state or select API-specific dependencies.
 
 ```rust,no_run
 use std::sync::Arc;
-use http_server::{FromState, api};
+use http_server::api;
 
 struct AppState {
     service_name: String,
@@ -126,14 +126,9 @@ struct AppState {
 
 http_server::registry!(state = Arc<AppState>);
 
+#[derive(http_server::FromState)]
 struct InfoApi {
     state: Arc<AppState>,
-}
-
-impl FromState<Arc<AppState>> for InfoApi {
-    fn from_state(state: &Arc<AppState>) -> Self {
-        Self { state: Arc::clone(state) }
-    }
 }
 
 #[api(prefix = "/info")]
@@ -159,9 +154,15 @@ and authenticator type. For an authenticated listener,
 declare `registry!(state = Arc<AppState>, auth = AppAuth)` and pass the
 `AppAuth` instance to `Server::bind_with_authenticator`.
 
-`AppState` is an example name and can live in any module. The declared state
-type must match `FromState<S>`; API fields need neither a prescribed name nor
-public visibility.
+`AppState` is an example name and can live in any module. When an API has
+exactly one named `state` field, use `#[derive(http_server::FromState)]`. The
+derive infers the state type and clones it; the field may be private. Only
+the field type needs `Clone`, so `Arc<T>` works even when `T` is not `Clone`.
+Generics and existing where clauses are preserved.
+
+For APIs with additional fields or custom construction, implement `FromState<S>`
+manually and omit the derive. Manual implementations can use any field layout.
+The declared group state type must match `S`.
 
 To bind a second group on another address, name the group on the API and pass
 that name as the second argument to `handlers!`. Groups can use different

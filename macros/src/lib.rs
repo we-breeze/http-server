@@ -2,7 +2,14 @@
 use proc_macro::TokenStream;
 
 mod expand;
+mod from_state;
 mod registry;
+
+/// Constructs an API by cloning its sole named `state` field.
+#[proc_macro_derive(FromState)]
+pub fn derive_from_state(input: TokenStream) -> TokenStream {
+    from_state::expand(input)
+}
 
 /// Declares an application registry with concrete state and authenticator types.
 #[proc_macro]

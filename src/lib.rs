@@ -10,6 +10,10 @@
 //! framework. Chunked request bodies and HTTP/2 are outside the current contract.
 //! API methods may return an owned byte stream for finite downloads.
 
+// Let generated macro paths resolve both inside this crate and in doctests.
+#[cfg(feature = "macros")]
+extern crate self as http_server;
+
 mod api_metrics;
 mod auth;
 mod body;
@@ -52,7 +56,7 @@ pub use stream::ResponseStream;
 
 #[cfg(feature = "macros")]
 pub use http_server_macros::{
-    api, delete, get, handlers, head, options, patch, post, put, registry,
+    FromState, api, delete, get, handlers, head, options, patch, post, put, registry,
 };
 
 #[cfg(feature = "macros")]

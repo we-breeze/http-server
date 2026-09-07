@@ -7,6 +7,32 @@ use crate::{Authenticator, Router};
 ///
 /// Each registered API is constructed once, before serving requests. APIs can
 /// clone the shared state or select the individual dependencies they need.
+/// For a struct whose only field is named `state`, derive this trait to clone
+/// that field's type. The field may be private and its type must implement
+/// `Clone`. Implement the trait manually for other layouts or initialization.
+///
+/// ```
+/// use std::sync::Arc;
+/// use http_server::FromState;
+///
+/// #[derive(FromState)]
+/// struct Api {
+///     state: Arc<String>,
+/// }
+///
+/// let state = Arc::new(String::from("example"));
+/// let api = Api::from_state(&state);
+/// assert!(Arc::ptr_eq(&state, &api.state));
+/// ```
+///
+/// A state that cannot be cloned needs a manual constructor or a shared owner:
+///
+/// ```compile_fail,E0277
+/// #[derive(http_server::FromState)]
+/// struct Api {
+///     state: std::sync::Mutex<u32>,
+/// }
+/// ```
 pub trait FromState<S>: Sized {
     fn from_state(state: &S) -> Self;
 }
