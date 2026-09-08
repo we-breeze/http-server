@@ -40,6 +40,86 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "brz-ds"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d33426295a21583e33b7f549518c0ce229856c73d598f22f06850e32d73b3811"
+dependencies = [
+ "crossbeam-utils",
+ "mimalloc",
+]
+
+[[package]]
+name = "brz-http-server"
+version = "0.1.0"
+dependencies = [
+ "brz-ds",
+ "brz-http-server-macros",
+ "brz-io",
+ "brz-json",
+ "brz-metrics",
+ "bytes",
+ "form_urlencoded",
+ "futures-util",
+ "http",
+ "httparse",
+ "inventory",
+ "itoa",
+ "multer",
+ "percent-encoding",
+ "serde",
+ "serde_html_form",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "brz-http-server-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "brz-io"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b46fde9f634e3d4b0f34b0c4d4357c102d6cf58c88364b375663f38c26bbdc2e"
+dependencies = [
+ "brz-ds",
+ "elsa",
+ "tokio",
+]
+
+[[package]]
+name = "brz-json"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df7e454f3dde249c2c40100df10d3859c9e58e8be4a57432af911afbadf8e5e1"
+dependencies = [
+ "brz-io",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "brz-metrics"
+version = "0.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d60fda46393ee2c2bdee8394d10b6b075128a9dc0cf6cab0159ea76279eabea4"
+dependencies = [
+ "ahash",
+ "arc-swap",
+ "chrono",
+ "serde_json",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -91,15 +171,6 @@ name = "crossbeam-utils"
 version = "0.8.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "61803da095bee82a81bb1a452ecc25d3b2f1416d1897eb86430c6159ef717c17"
-
-[[package]]
-name = "ds"
-version = "0.1.0"
-source = "git+https://github.com/we-breeze/ds.git?tag=v0.0.1#cfb71d3c9873cda51f708a35164369b9bea36ae9"
-dependencies = [
- "crossbeam-utils",
- "mimalloc",
-]
 
 [[package]]
 name = "elsa"
@@ -193,42 +264,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "http-server"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "ds",
- "form_urlencoded",
- "futures-util",
- "http",
- "http-server-macros",
- "httparse",
- "inventory",
- "io",
- "itoa",
- "json",
- "metrics",
- "multer",
- "percent-encoding",
- "serde",
- "serde_html_form",
- "serde_json",
- "thiserror",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "http-server-macros"
-version = "0.1.0"
-dependencies = [
- "proc-macro-crate",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -278,16 +313,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "io"
-version = "0.1.0"
-source = "git+https://github.com/we-breeze/io.git?tag=v0.0.1#5e583f9bcd57613040c3467fb68adb3decb37d2d"
-dependencies = [
- "ds",
- "elsa",
- "tokio",
-]
-
-[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -302,16 +327,6 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "json"
-version = "0.1.0"
-source = "git+https://github.com/we-breeze/json.git?tag=v0.0.1#b9b8994e91252a3c4bd3ee313b52e5790c5f1c4e"
-dependencies = [
- "io",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -340,16 +355,6 @@ name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
-
-[[package]]
-name = "metrics"
-version = "0.1.0"
-source = "git+https://github.com/we-breeze/metrics.git?tag=v0.0.2#32b13bd58a51dbfef2f5ab867a2747093ced3833"
-dependencies = [
- "ahash",
- "arc-swap",
- "chrono",
-]
 
 [[package]]
 name = "mimalloc"

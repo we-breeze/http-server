@@ -44,7 +44,7 @@ examples use `register = false` for manually constructed handlers.
 
 ```toml
 [dependencies]
-http-server = { git = "https://github.com/we-breeze/http-server.git", tag = "v0.0.6", features = ["macros"] }
+brz-http-server = { version = "0.0.7", features = ["macros"] }
 serde = { version = "1", features = ["derive"] }
 ```
 
@@ -54,7 +54,7 @@ override either codec or auth mode. `protobuf` is reserved for a later codec
 implementation.
 
 ```rust,no_run
-use http_server::{ApiResult, api};
+use brz_http_server::{ApiResult, api};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -72,13 +72,13 @@ struct UserApi;
 
 #[api(prefix = "/v1/users", register = false)]
 impl UserApi {
-    #[http_server::get("/:id")]
+    #[brz_http_server::get("/:id")]
     async fn get(&self, id: u64, verbose: Option<bool>) -> UserView<'static> {
         let _ = verbose;
         UserView { id, name: "read" }
     }
 
-    #[http_server::post("/:id", headers(trace_id = "x-trace-id"))]
+    #[brz_http_server::post("/:id", headers(trace_id = "x-trace-id"))]
     async fn update<'a>(
         &self,
         id: u64,
@@ -118,22 +118,22 @@ state type; it can retain shared state or select API-specific dependencies.
 
 ```rust,no_run
 use std::sync::Arc;
-use http_server::api;
+use brz_http_server::api;
 
 struct AppState {
     service_name: String,
 }
 
-http_server::registry!(state = Arc<AppState>);
+brz_http_server::registry!(state = Arc<AppState>);
 
-#[derive(http_server::FromState)]
+#[derive(brz_http_server::FromState)]
 struct InfoApi {
     state: Arc<AppState>,
 }
 
 #[api(prefix = "/info")]
 impl InfoApi {
-    #[http_server::get("/name")]
+    #[brz_http_server::get("/name")]
     async fn name(&self) -> String {
         self.state.service_name.clone()
     }
@@ -141,8 +141,8 @@ impl InfoApi {
 
 async fn bind() -> Result<(), Box<dyn std::error::Error>> {
     let state = Arc::new(AppState { service_name: "example".into() });
-    let handler = http_server::handlers!(state)?;
-    let _server = http_server::Server::bind("127.0.0.1:8080".parse()?, handler).await?;
+    let handler = brz_http_server::handlers!(state)?;
+    let _server = brz_http_server::Server::bind("127.0.0.1:8080".parse()?, handler).await?;
     Ok(())
 }
 ```
@@ -155,7 +155,7 @@ declare `registry!(state = Arc<AppState>, auth = AppAuth)` and pass the
 `AppAuth` instance to `Server::bind_with_authenticator`.
 
 `AppState` is an example name and can live in any module. When an API has
-exactly one named `state` field, use `#[derive(http_server::FromState)]`. The
+exactly one named `state` field, use `#[derive(brz_http_server::FromState)]`. The
 derive infers the state type and clones it; the field may be private. Only
 the field type needs `Clone`, so `Arc<T>` works even when `T` is not `Clone`.
 Generics and existing where clauses are preserved.
@@ -170,20 +170,20 @@ authenticator types. This example keeps the public default group above and
 adds an authenticated admin listener:
 
 ```rust,ignore
-http_server::registry!(group = admin, state = Arc<AppState>, auth = AdminAuth);
+brz_http_server::registry!(group = admin, state = Arc<AppState>, auth = AdminAuth);
 
-#[http_server::api(prefix = "/admin", group = admin, auth = required)]
+#[brz_http_server::api(prefix = "/admin", group = admin, auth = required)]
 impl AdminApi {
     // Annotated methods; AdminApi implements FromState<Arc<AppState>>.
 }
 
-let public_server = http_server::Server::bind(
+let public_server = brz_http_server::Server::bind(
     "0.0.0.0:8080".parse()?,
-    http_server::handlers!(state)?,
+    brz_http_server::handlers!(state)?,
 ).await?;
-let admin_server = http_server::Server::bind_with_authenticator(
+let admin_server = brz_http_server::Server::bind_with_authenticator(
     "127.0.0.1:9090".parse()?,
-    http_server::handlers!(state, admin)?,
+    brz_http_server::handlers!(state, admin)?,
     admin_auth,
 ).await?;
 ```
@@ -206,8 +206,8 @@ declaration or `FromState` implementation. A collected group can be merged
 with a manually constructed readiness API that uses `register = false`:
 
 ```rust,ignore
-let handler = http_server::Router::new(readiness_api)
-    .merge(http_server::handlers!(state)?);
+let handler = brz_http_server::Router::new(readiness_api)
+    .merge(brz_http_server::handlers!(state)?);
 ```
 
 `Router<A>` has a fixed type for each authenticator, regardless of how many API
@@ -235,7 +235,7 @@ but rejects malformed credentials with `401`.
 ```rust,no_run
 use std::future::Future;
 
-use http_server::{
+use brz_http_server::{
     AuthFailure, AuthRequest, Authenticated, Authenticator, api,
 };
 use serde::Serialize;
@@ -279,13 +279,13 @@ struct UserApi;
 
 #[api(prefix = "/v1/users", auth = required, register = false)]
 impl UserApi {
-    #[http_server::get("/:id")]
+    #[brz_http_server::get("/:id")]
     async fn get(&self, id: u64, actor: Authenticated<Actor>) -> UserView {
         let _caller = actor.principal().user_id;
         UserView { id }
     }
 
-    #[http_server::get("/health", auth = none)]
+    #[brz_http_server::get("/health", auth = none)]
     async fn health(&self) -> HealthView {
         HealthView { ok: true }
     }
@@ -366,7 +366,7 @@ are checked while writing; stream errors or mismatched lengths close the
 connection. A write error, idle timeout, or cancelled connection drops the
 upstream producer. HEAD and bodyless statuses do not poll the stream.
 
-`http_server::StatusCode` re-exports `http::StatusCode`. Return `(StatusCode, T)`
+`brz_http_server::StatusCode` re-exports `http::StatusCode`. Return `(StatusCode, T)`
 for an explicit status with a JSON value or stream. A plain business value
 still receives status 200; redirects use `Redirect::found` (302) or
 `Redirect::temporary` (307).
@@ -380,3 +380,15 @@ cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 API 指标的完整名称由宏生成的 `concat!` 在编译时确定；注册时缓存指标句柄，请求处理时不拼接指标名称。
+
+## Releases
+
+CI runs formatting, Clippy, and tests. To publish, open **Actions → Publish → Run workflow** on `main`. Leave `retry_tag` empty to allocate the next `v0.0.x` tag. The workflow validates the code, commits the version, pushes the commit and tag atomically, and publishes to crates.io using the organization secret `CARGO_REGISTRY_TOKEN`.
+
+If publication fails after the tag was pushed, rerun with that existing tag in `retry_tag`. A normal push or pull request does not publish. Historical tags retain their original version numbers; use new release tags for registry packages.
+
+## License
+
+Licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+
+The workflow releases `brz-http-server-macros` before `brz-http-server` at the same version. It verifies the macro package before tagging, then verifies the main package after the macro becomes available in the registry. Retrying skips an uploaded package only when its checksum matches the locally packaged artifact.

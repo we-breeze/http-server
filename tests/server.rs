@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use http_server::{
+use brz_http_server::{
     EphemeralBytesArena, Handler, HeaderBlock, NoAuthenticator, Request, Response, Server,
     ServerConfig, StatusCode,
 };

@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use brz_http_server::{Handler, Response, Router, Server, ServerConfig, StatusCode, api};
 use brz_metrics::MetricSnapshot;
-use http_server::{Handler, Response, Router, Server, ServerConfig, StatusCode, api};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
@@ -14,27 +14,27 @@ struct StatusApi;
 
 #[api(prefix = "/metric-test", register = false)]
 impl StatusApi {
-    #[http_server::get("/:code")]
+    #[brz_http_server::get("/:code")]
     async fn status(&self, code: u16) -> Response {
         Response::empty(StatusCode::from_u16(code).unwrap())
     }
 
-    #[http_server::post("/:code")]
+    #[brz_http_server::post("/:code")]
     async fn create(&self, code: u16) -> Response {
         Response::empty(StatusCode::from_u16(code).unwrap())
     }
 
-    #[http_server::get("/secure", auth = required)]
+    #[brz_http_server::get("/secure", auth = required)]
     async fn secure(&self) -> StatusCode {
         StatusCode::OK
     }
 
-    #[http_server::get("/slow")]
+    #[brz_http_server::get("/slow")]
     async fn slow(&self) -> StatusCode {
         std::future::pending().await
     }
 
-    #[http_server::get("/invalid-json")]
+    #[brz_http_server::get("/invalid-json")]
     async fn invalid_json(&self) -> BTreeMap<Vec<u8>, u8> {
         [(vec![1, 2], 3)].into_iter().collect()
     }
@@ -44,7 +44,7 @@ struct StaticApi;
 
 #[api(prefix = "/metric-test", register = false)]
 impl StaticApi {
-    #[http_server::get("/special")]
+    #[brz_http_server::get("/special")]
     async fn special(&self) -> StatusCode {
         StatusCode::SEE_OTHER
     }

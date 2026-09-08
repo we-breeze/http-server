@@ -7,8 +7,8 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use http_server::__private::{PreparedRoute, RouteDescriptor, RouteMatch};
-use http_server::{
+use brz_http_server::__private::{PreparedRoute, RouteDescriptor, RouteMatch};
+use brz_http_server::{
     AuthFailure, AuthRequest, Authenticated, Authenticator, Handler, NoAuthenticator, Request,
     Response, Router, Server, ServerConfig, Text, api,
 };
@@ -20,7 +20,7 @@ use tokio::{
 struct StaticApi;
 #[api(register = false)]
 impl StaticApi {
-    #[http_server::get("/users/byname")]
+    #[brz_http_server::get("/users/byname")]
     async fn byname(&self) -> Text {
         Text("static".into())
     }
@@ -29,12 +29,12 @@ impl StaticApi {
 struct ParameterApi;
 #[api(register = false)]
 impl ParameterApi {
-    #[http_server::get("/users/:id")]
+    #[brz_http_server::get("/users/:id")]
     async fn read(&self, id: &str) -> Text {
         tokio::task::yield_now().await;
         Text(format!("read:{id}"))
     }
-    #[http_server::post("/users/:id")]
+    #[brz_http_server::post("/users/:id")]
     async fn write(&self, id: &str) -> Text {
         Text(format!("write:{id}"))
     }
@@ -43,7 +43,7 @@ impl ParameterApi {
 struct WildcardApi;
 #[api(register = false)]
 impl WildcardApi {
-    #[http_server::put("/users/*rest")]
+    #[brz_http_server::put("/users/*rest")]
     async fn rest(&self, rest: &str) -> Text {
         Text(format!("rest:{rest}"))
     }
@@ -52,7 +52,7 @@ impl WildcardApi {
 struct Shard<const N: usize>;
 #[api(register = false)]
 impl<const N: usize> Shard<N> {
-    #[http_server::get("/shard")]
+    #[brz_http_server::get("/shard")]
     async fn read(&self) -> usize {
         N
     }
@@ -70,7 +70,7 @@ impl<A: Authenticator, H: Handler<A>> Handler<A> for IndexedOnly<H> {
     fn route_priority(&self, _: &str, _: &str) -> Option<usize> {
         panic!("repeated route search")
     }
-    fn route_metrics(&self, _: &str, _: &str) -> Option<(usize, http_server::ApiMetrics)> {
+    fn route_metrics(&self, _: &str, _: &str) -> Option<(usize, brz_http_server::ApiMetrics)> {
         panic!("repeated metric search")
     }
     fn route_methods(&self, _: &str) -> u16 {
@@ -217,7 +217,7 @@ struct PrivateApi {
 }
 #[api(auth = required, register = false)]
 impl PrivateApi {
-    #[http_server::get("/private")]
+    #[brz_http_server::get("/private")]
     async fn private(&self, actor: Authenticated<Principal>) -> Text {
         let _ = actor.principal();
         Text(self.value.into())

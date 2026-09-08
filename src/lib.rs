@@ -12,7 +12,7 @@
 
 // Let generated macro paths resolve both inside this crate and in doctests.
 #[cfg(feature = "macros")]
-extern crate self as http_server;
+extern crate self as brz_http_server;
 
 mod api_metrics;
 mod auth;
@@ -62,7 +62,7 @@ pub use http_server_macros::{
 #[cfg(feature = "macros")]
 pub use registry::{FromState, RegistryError};
 
-/// Implementation details used by `#[http_server::api]` generated code.
+/// Implementation details used by `#[brz_http_server::api]` generated code.
 #[doc(hidden)]
 pub mod __private {
     pub use crate::auth::{authenticate_optional, authenticate_required};

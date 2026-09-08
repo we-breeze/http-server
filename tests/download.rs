@@ -6,11 +6,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use futures_util::stream;
-use http_server::{
+use brz_http_server::{
     Bytes, Handler, HttpResponse, IntoHttpResponse, NoAuthenticator, Request, Response, Server,
     ServerConfig, StatusCode, Stream, api,
 };
+use futures_util::stream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{Notify, oneshot};
@@ -18,7 +18,7 @@ use tokio::sync::{Notify, oneshot};
 struct Downloads;
 #[api(register = false)]
 impl Downloads {
-    #[http_server::get("/file")]
+    #[brz_http_server::get("/file")]
     async fn file(&self) -> impl Stream<Item = Result<Bytes, Infallible>> + Send + 'static {
         stream::iter([
             Ok(Bytes::from_static(b"hello")),
@@ -26,7 +26,7 @@ impl Downloads {
             Ok(Bytes::from_static(b"\0\xffworld")),
         ])
     }
-    #[http_server::get("/range")]
+    #[brz_http_server::get("/range")]
     async fn range(&self) -> HttpResponse<impl Stream<Item = io::Result<Bytes>> + Send + 'static> {
         HttpResponse::new(stream::iter([Ok(Bytes::from_static(b"xyz"))]))
             .status(StatusCode::PARTIAL_CONTENT)
@@ -38,11 +38,11 @@ impl Downloads {
             .header("content-disposition", "attachment; filename=video.mp4")
             .unwrap()
     }
-    #[http_server::get("/short")]
+    #[brz_http_server::get("/short")]
     async fn short(&self) -> HttpResponse<impl Stream<Item = io::Result<Bytes>> + Send + 'static> {
         HttpResponse::new(stream::iter([Ok(Bytes::from_static(b"abc"))])).content_length(4)
     }
-    #[http_server::get("/long")]
+    #[brz_http_server::get("/long")]
     async fn long(&self) -> HttpResponse<impl Stream<Item = io::Result<Bytes>> + Send + 'static> {
         HttpResponse::new(stream::iter([
             Ok(Bytes::from_static(b"abc")),
@@ -50,14 +50,14 @@ impl Downloads {
         ]))
         .content_length(4)
     }
-    #[http_server::get("/error")]
+    #[brz_http_server::get("/error")]
     async fn error(&self) -> impl Stream<Item = io::Result<Bytes>> + Send + 'static {
         stream::iter([
             Ok(Bytes::from_static(b"abc")),
             Err(io::Error::other("upstream failed")),
         ])
     }
-    #[http_server::get("/empty")]
+    #[brz_http_server::get("/empty")]
     async fn empty(&self) -> impl Stream<Item = io::Result<Bytes>> + Send + 'static {
         stream::empty()
     }

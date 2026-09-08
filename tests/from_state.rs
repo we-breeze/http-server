@@ -5,7 +5,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use http_server::{FromState, Server, api};
+use brz_http_server::{FromState, Server, api};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -32,12 +32,12 @@ impl Provider for SharedProvider {
     type State = Arc<Payload>;
 }
 
-#[derive(http_server::FromState)]
+#[derive(brz_http_server::FromState)]
 struct ProjectedApi<T: Provider> {
     state: T::State,
 }
 
-#[derive(http_server::FromState)]
+#[derive(brz_http_server::FromState)]
 struct BorrowedApi<'a, const N: usize> {
     state: &'a [u8; N],
 }
@@ -80,19 +80,19 @@ impl CloneState {
     }
 }
 
-http_server::registry!(state = CloneState);
+brz_http_server::registry!(state = CloneState);
 
 mod endpoints {
     use super::{CloneState, api};
 
-    #[derive(http_server::FromState)]
+    #[derive(brz_http_server::FromState)]
     struct DerivedApi {
         state: CloneState,
     }
 
     #[api(prefix = "/fixture")]
     impl DerivedApi {
-        #[http_server::get("/derived/:offset")]
+        #[brz_http_server::get("/derived/:offset")]
         async fn read(&self, offset: u32) -> u32 {
             tokio::task::yield_now().await;
             self.state.value + offset
@@ -107,7 +107,7 @@ async fn derived_private_field_registers_and_clones_only_when_collecting() {
         clones: Arc::clone(&clones),
         value: 40,
     };
-    let handler = http_server::handlers!(state).unwrap();
+    let handler = brz_http_server::handlers!(state).unwrap();
     assert_eq!(clones.load(Ordering::Relaxed), 1);
     let server = Server::bind("127.0.0.1:0".parse().unwrap(), handler)
         .await

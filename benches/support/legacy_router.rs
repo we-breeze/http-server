@@ -1,5 +1,5 @@
 // Pre-change Router, retained only as a routing benchmark baseline.
-use http_server::{Authenticator, Handler, IntoHttpResponse, Request, Response, StatusCode};
+use brz_http_server::{Authenticator, Handler, IntoHttpResponse, Request, Response, StatusCode};
 
 /// Statically composes macro-exported API groups on one listener.
 pub struct Router<L, R = EmptyRoutes> {
@@ -33,7 +33,11 @@ impl<A: Authenticator, L: Handler<A>, R: Handler<A>> Handler<A> for Router<L, R>
         self.right.register_metrics();
     }
 
-    fn route_metrics(&self, path: &str, method: &str) -> Option<(usize, http_server::ApiMetrics)> {
+    fn route_metrics(
+        &self,
+        path: &str,
+        method: &str,
+    ) -> Option<(usize, brz_http_server::ApiMetrics)> {
         let left = self.left.route_priority(path, method);
         let right = self.right.route_priority(path, method);
         if right > left {
@@ -88,7 +92,7 @@ impl<A: Authenticator> Handler<A> for EmptyRoutes {
 /// Generates the shared 404/405 response after checking all matching routes.
 #[doc(hidden)]
 #[must_use]
-pub fn unmatched(methods: u16, arena: &http_server::EphemeralBytesArena) -> Response {
+pub fn unmatched(methods: u16, arena: &brz_http_server::EphemeralBytesArena) -> Response {
     if methods == 0 {
         return Response::empty(StatusCode::NOT_FOUND);
     }
@@ -98,7 +102,7 @@ pub fn unmatched(methods: u16, arena: &http_server::EphemeralBytesArena) -> Resp
         .filter_map(|(index, method)| (methods & (1 << index) != 0).then_some(method))
         .collect::<Vec<_>>()
         .join(", ");
-    http_server::HttpResponse::new(Response::empty(StatusCode::METHOD_NOT_ALLOWED))
+    brz_http_server::HttpResponse::new(Response::empty(StatusCode::METHOD_NOT_ALLOWED))
         .header("allow", &methods)
         .expect("standard HTTP method names")
         .into_http_response(arena)

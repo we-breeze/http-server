@@ -9,7 +9,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use http_server::{Handler, Router, Server, api};
+use brz_http_server::{Handler, Router, Server, api};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -23,7 +23,7 @@ macro_rules! fixture_api {
 
         #[api(prefix = $prefix, register = false)]
         impl $name {
-            #[http_server::get($path)]
+            #[brz_http_server::get($path)]
             async fn read(&self, $parameter: $ty) -> (usize, String) {
                 tokio::task::yield_now().await;
                 self.0.fetch_add(1, Ordering::Relaxed);
@@ -92,7 +92,7 @@ fn fixture_router(reverse: bool, calls: &Arc<AtomicUsize>) -> Router {
 struct Running {
     address: SocketAddr,
     shutdown: oneshot::Sender<()>,
-    task: JoinHandle<http_server::Result<()>>,
+    task: JoinHandle<brz_http_server::Result<()>>,
 }
 
 impl Running {
@@ -238,17 +238,17 @@ async fn malformed_shapes_and_wrong_methods_never_invoke_business_handlers() {
 struct StaticNeighbors;
 #[api(prefix = "/svc", register = false)]
 impl StaticNeighbors {
-    #[http_server::get("/jobs/search")]
+    #[brz_http_server::get("/jobs/search")]
     async fn search(&self) -> &'static str {
         "static-search"
     }
 
-    #[http_server::get("/jobs/42/remote-node/health")]
+    #[brz_http_server::get("/jobs/42/remote-node/health")]
     async fn health(&self) -> &'static str {
         "static-health"
     }
 
-    #[http_server::post("/jobs/42/tools")]
+    #[brz_http_server::post("/jobs/42/tools")]
     async fn tools(&self) -> &'static str {
         "static-tools-post"
     }

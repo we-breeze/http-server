@@ -13,7 +13,7 @@ use crate::{Authenticator, Router};
 ///
 /// ```
 /// use std::sync::Arc;
-/// use http_server::FromState;
+/// use brz_http_server::FromState;
 ///
 /// #[derive(FromState)]
 /// struct Api {
@@ -28,7 +28,7 @@ use crate::{Authenticator, Router};
 /// A state that cannot be cloned needs a manual constructor or a shared owner:
 ///
 /// ```compile_fail,E0277
-/// #[derive(http_server::FromState)]
+/// #[derive(brz_http_server::FromState)]
 /// struct Api {
 ///     state: std::sync::Mutex<u32>,
 /// }

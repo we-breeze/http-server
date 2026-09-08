@@ -261,7 +261,7 @@ fn expand_api(arguments: &ApiArguments, mut input: ItemImpl) -> syn::Result<Toke
     if input.trait_.is_some() {
         return Err(syn::Error::new_spanned(
             &input,
-            "http_server::api requires an inherent impl",
+            "brz_http_server::api requires an inherent impl",
         ));
     }
 
@@ -299,7 +299,7 @@ fn expand_api(arguments: &ApiArguments, mut input: ItemImpl) -> syn::Result<Toke
     if endpoints.is_empty() {
         return Err(syn::Error::new_spanned(
             &input,
-            "http_server::api requires at least one #[get], #[post], #[put], #[patch], or #[delete] method",
+            "brz_http_server::api requires at least one #[get], #[post], #[put], #[patch], or #[delete] method",
         ));
     }
 
@@ -960,12 +960,12 @@ fn route_shape(path: &str) -> String {
 }
 
 pub(crate) fn server_crate_path() -> TokenStream2 {
-    match crate_name("http-server") {
+    match crate_name("brz-http-server") {
         Ok(FoundCrate::Name(name)) => {
             let ident = Ident::new(&name.replace('-', "_"), proc_macro2::Span::call_site());
             quote!(::#ident)
         }
-        Ok(FoundCrate::Itself) | Err(_) => quote!(::http_server),
+        Ok(FoundCrate::Itself) | Err(_) => quote!(::brz_http_server),
     }
 }
 

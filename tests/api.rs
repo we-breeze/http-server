@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use http_server::{
+use brz_http_server::{
     ApiError, ApiResult, AuthFailure, AuthRequest, Authenticated, Authenticator,
     EphemeralBytesArena, Handler, Server, ServerConfig, StatusCode, api,
 };
@@ -68,7 +68,7 @@ struct ProtectedApi;
 
 #[api(prefix = "/private", auth = required, register = false)]
 impl ProtectedApi {
-    #[http_server::get("/:id")]
+    #[brz_http_server::get("/:id")]
     async fn get(&self, id: u64, auth: Authenticated<Actor>) -> PrivateView {
         std::future::ready(()).await;
         PrivateView {
@@ -77,7 +77,7 @@ impl ProtectedApi {
         }
     }
 
-    #[http_server::get("/optional", auth = optional)]
+    #[brz_http_server::get("/optional", auth = optional)]
     async fn optional(&self, auth: Option<Authenticated<Actor>>) -> OptionalAuthView {
         std::future::ready(()).await;
         OptionalAuthView {
@@ -85,7 +85,7 @@ impl ProtectedApi {
         }
     }
 
-    #[http_server::get("/health", auth = none)]
+    #[brz_http_server::get("/health", auth = none)]
     async fn health(&self) -> HealthView {
         std::future::ready(()).await;
         HealthView { ok: true }
@@ -94,7 +94,7 @@ impl ProtectedApi {
 
 #[api(prefix = "/v1/users", register = false)]
 impl UserApi {
-    #[http_server::get("/:id")]
+    #[brz_http_server::get("/:id")]
     async fn get(&self, id: u64, verbose: Option<bool>) -> UserView<'static> {
         std::future::ready(()).await;
         self.calls.fetch_add(1, Ordering::Relaxed);
@@ -106,7 +106,7 @@ impl UserApi {
         }
     }
 
-    #[http_server::post("/:id", headers(trace_id = "x-trace-id"))]
+    #[brz_http_server::post("/:id", headers(trace_id = "x-trace-id"))]
     async fn update<'a>(
         &self,
         id: u64,
@@ -276,7 +276,7 @@ async fn macro_serializes_a_business_forbidden_error() {
 async fn custom_authenticator_injects_or_rejects_a_typed_principal() {
     let server = Server::bind_with_authenticator_and_config(
         "127.0.0.1:0".parse().unwrap(),
-        http_server::Router::new(ProtectedApi),
+        brz_http_server::Router::new(ProtectedApi),
         HeaderAuthenticator,
         ServerConfig::new(EphemeralBytesArena::new(1024)),
     )
@@ -355,7 +355,7 @@ async fn segmented_json_borrows_escaped_fields_across_await_and_pipelining() {
     config.max_request_head_bytes = 256;
     let server = Server::bind_with_config(
         "127.0.0.1:0".parse().unwrap(),
-        http_server::Router::new(UserApi {
+        brz_http_server::Router::new(UserApi {
             calls: Arc::clone(&calls),
         }),
         config,
@@ -406,7 +406,7 @@ async fn invalid_segmented_json_is_rejected_without_losing_the_next_request() {
     let calls = Arc::new(AtomicUsize::new(0));
     let server = Server::bind_with_config(
         "127.0.0.1:0".parse().unwrap(),
-        http_server::Router::new(UserApi {
+        brz_http_server::Router::new(UserApi {
             calls: Arc::clone(&calls),
         }),
         ServerConfig::new(EphemeralBytesArena::new(3)),

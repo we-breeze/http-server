@@ -1,6 +1,6 @@
 #![cfg(feature = "macros")]
 
-use http_server::{Handler, Redirect, Router, Server, api};
+use brz_http_server::{Handler, Redirect, Router, Server, api};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -28,7 +28,7 @@ async fn request(handler: impl Handler, request: &str) -> Vec<u8> {
 struct Login;
 #[api(register = false)]
 impl Login {
-    #[http_server::get("/callback")]
+    #[brz_http_server::get("/callback")]
     async fn callback(&self, redirect: &str) -> Redirect {
         Redirect::found(redirect)
     }
@@ -56,7 +56,7 @@ async fn redirect_encodes_source_error_message() {
 struct Reads;
 #[api(register = false)]
 impl Reads {
-    #[http_server::get("/items")]
+    #[brz_http_server::get("/items")]
     async fn list(&self) -> u64 {
         1
     }
@@ -64,7 +64,7 @@ impl Reads {
 struct Writes;
 #[api(register = false)]
 impl Writes {
-    #[http_server::post("/items")]
+    #[brz_http_server::post("/items")]
     async fn create(&self) -> u64 {
         2
     }
@@ -85,7 +85,7 @@ type FailedPayload = (HttpStatus, std::collections::HashMap<Vec<u8>, i64>);
 struct Serialization;
 #[api(register = false)]
 impl Serialization {
-    #[http_server::get("/invalid")]
+    #[brz_http_server::get("/invalid")]
     async fn invalid(&self) -> FailedPayload {
         (
             http::StatusCode::CREATED,

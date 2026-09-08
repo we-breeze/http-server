@@ -3,8 +3,10 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use http_server::__private::{RouteDescriptor, decode_path, match_route};
-use http_server::{ApiMetrics, Handler, NoAuthenticator, Request, Response, Router, StatusCode};
+use brz_http_server::__private::{RouteDescriptor, decode_path, match_route};
+use brz_http_server::{
+    ApiMetrics, Handler, NoAuthenticator, Request, Response, Router, StatusCode,
+};
 
 #[path = "support/legacy_router.rs"]
 mod legacy;
