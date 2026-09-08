@@ -153,14 +153,17 @@ pub struct NoAuthenticator;
 impl Authenticator for NoAuthenticator {
     type Principal = ();
 
-    async fn authenticate<'a>(
+    fn authenticate<'a>(
         &'a self,
         _request: AuthRequest<'a>,
-    ) -> std::result::Result<Self::Principal, AuthFailure> {
-        Err(AuthFailure::missing_credentials("Bearer"))
+    ) -> impl std::future::Future<Output = std::result::Result<Self::Principal, AuthFailure>> + Send
+    {
+        std::future::ready(Err(AuthFailure::missing_credentials("Bearer")))
     }
 }
 
+// Keep the owned response inline to avoid a separate error-path allocation.
+#[allow(clippy::result_large_err)]
 #[doc(hidden)]
 pub async fn authenticate_required<A>(
     authenticator: &A,
@@ -177,6 +180,8 @@ where
         .map_err(|failure| authenticator.reject(request, failure, arena))
 }
 
+// Keep the owned response inline to avoid a separate error-path allocation.
+#[allow(clippy::result_large_err)]
 #[doc(hidden)]
 pub async fn authenticate_optional<A>(
     authenticator: &A,
