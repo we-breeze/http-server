@@ -160,6 +160,8 @@ impl Drop for DropSignal {
     }
 }
 impl Handler for Gated {
+    // Keep fixtures on the same async trait API as real handlers.
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn call(&self, request: Request<'_>, _: &NoAuthenticator) -> Response {
         let release = self.release.clone();
         let polls = self.polls.clone();
@@ -282,6 +284,8 @@ async fn chunked_response_completes_before_next_pipelined_response() {
 
 struct Continuous(Arc<Notify>);
 impl Handler for Continuous {
+    // Keep fixtures on the same async trait API as real handlers.
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn call(&self, request: Request<'_>, _: &NoAuthenticator) -> Response {
         let guard = DropSignal(self.0.clone());
         let chunk = Bytes::from(vec![7; 128 * 1024]);

@@ -277,7 +277,7 @@ fn expand_api(arguments: &ApiArguments, mut input: ItemImpl) -> syn::Result<Toke
         // Routes have a uniform async signature, including immediate responses.
         method
             .attrs
-            .push(syn::parse_quote!(#[allow(clippy::unused_async)]));
+            .push(syn::parse_quote!(#[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)]));
         let route = attribute.parse_args::<RouteArguments>()?;
         let consumes = route.consumes.unwrap_or(arguments.consumes);
         let produces = route.produces.unwrap_or(arguments.produces);

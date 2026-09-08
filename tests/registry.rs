@@ -193,6 +193,8 @@ struct Principal(&'static str);
 impl Authenticator for TokenAuth {
     type Principal = Principal;
 
+    // Keep fixtures on the same async trait API as real handlers.
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn authenticate(&self, request: AuthRequest<'_>) -> Result<Principal, AuthFailure> {
         match request.header("authorization") {
             Some(b"Bearer fixture-token") => Ok(Principal("accepted")),

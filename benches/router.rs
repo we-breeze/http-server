@@ -74,6 +74,8 @@ impl Handler for Api {
             .filter(|route| match_route(&path, route.path).is_some())
             .fold(0, |bits, route| bits | route.methods)
     }
+    // Keep fixtures on the same async trait API as real handlers.
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn call(&self, _: Request<'_>, _: &NoAuthenticator) -> Response {
         Response::empty(StatusCode::OK)
     }

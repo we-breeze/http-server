@@ -14,6 +14,8 @@ struct Echo {
 }
 
 impl Handler for Echo {
+    // Exercise the async handler API with an immediately ready test response.
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn call(&self, request: Request<'_>, _: &NoAuthenticator) -> Response {
         match (request.method(), request.path()) {
             ("POST", "/echo") => {

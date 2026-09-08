@@ -67,6 +67,8 @@ impl<A: Authenticator, L: Handler<A>, R: Handler<A>> Handler<A> for Router<L, R>
         self.left.route_methods(path) | self.right.route_methods(path)
     }
 
+    // Keep fixtures on the same async trait API as real handlers.
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn call(&self, request: Request<'_>, authenticator: &A) -> Response {
         let left = self.left.route_priority(request.path(), request.method());
         let right = self.right.route_priority(request.path(), request.method());
@@ -84,6 +86,8 @@ impl<A: Authenticator, L: Handler<A>, R: Handler<A>> Handler<A> for Router<L, R>
 pub struct EmptyRoutes;
 
 impl<A: Authenticator> Handler<A> for EmptyRoutes {
+    // Keep fixtures on the same async trait API as real handlers.
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn call(&self, _request: Request<'_>, _authenticator: &A) -> Response {
         Response::empty(StatusCode::NOT_FOUND)
     }

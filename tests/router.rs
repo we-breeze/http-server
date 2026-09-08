@@ -76,6 +76,8 @@ impl<A: Authenticator, H: Handler<A>> Handler<A> for IndexedOnly<H> {
     fn route_methods(&self, _: &str) -> u16 {
         panic!("repeated method search")
     }
+    // Keep fixtures on the same async trait API as real handlers.
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn call(&self, _: Request<'_>, _: &A) -> Response {
         panic!("unselected dispatch")
     }
@@ -111,6 +113,8 @@ impl Handler for CountPrepared {
     ) -> impl Future<Output = Response> + Send + 'a {
         self.router.call_prepared(request, auth, prepared)
     }
+    // Keep fixtures on the same async trait API as real handlers.
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn call(&self, _: Request<'_>, _: &NoAuthenticator) -> Response {
         panic!("server discarded prepared route")
     }
@@ -208,6 +212,8 @@ struct Principal;
 struct Auth;
 impl Authenticator for Auth {
     type Principal = Principal;
+    // Keep fixtures on the same async trait API as real handlers.
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn authenticate(&self, _: AuthRequest<'_>) -> Result<Principal, AuthFailure> {
         Ok(Principal)
     }

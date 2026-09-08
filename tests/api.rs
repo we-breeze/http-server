@@ -39,6 +39,8 @@ struct HeaderAuthenticator;
 impl Authenticator for HeaderAuthenticator {
     type Principal = Actor;
 
+    // Keep fixtures on the same async trait API as real handlers.
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn authenticate<'a>(&'a self, request: AuthRequest<'a>) -> Result<Actor, AuthFailure> {
         match request.header("authorization") {
             None => Err(AuthFailure::missing_credentials("Bearer")),
