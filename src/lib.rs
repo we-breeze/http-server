@@ -10,6 +10,8 @@
 //! framework. Chunked request bodies and HTTP/2 are outside the current contract.
 //! API methods may return an owned byte stream for finite downloads.
 
+#![cfg_attr(feature = "macros", doc = include_str!("../docs/function-api.md"))]
+
 // Let generated macro paths resolve both inside this crate and in doctests.
 #[cfg(feature = "macros")]
 extern crate self as brz_http_server;
@@ -55,14 +57,12 @@ pub use server::{Handler, Server, ServerConfig};
 pub use stream::ResponseStream;
 
 #[cfg(feature = "macros")]
-pub use http_server_macros::{
-    FromState, api, delete, get, handlers, head, options, patch, post, put, registry,
-};
+pub use http_server_macros::{delete, get, handlers, head, options, patch, post, put, registry};
 
 #[cfg(feature = "macros")]
-pub use registry::{FromState, RegistryError};
+pub use registry::RegistryError;
 
-/// Implementation details used by `#[brz_http_server::api]` generated code.
+/// Implementation details used by function API generated code.
 #[doc(hidden)]
 pub mod __private {
     pub use crate::auth::{authenticate_optional, authenticate_required};

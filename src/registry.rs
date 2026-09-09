@@ -3,41 +3,7 @@ use std::fmt;
 use crate::router::RouteDescriptor;
 use crate::{Authenticator, Router};
 
-/// Constructs an API from the application state supplied to `handlers!`.
-///
-/// Each registered API is constructed once, before serving requests. APIs can
-/// clone the shared state or select the individual dependencies they need.
-/// For a struct whose only field is named `state`, derive this trait to clone
-/// that field's type. The field may be private and its type must implement
-/// `Clone`. Implement the trait manually for other layouts or initialization.
-///
-/// ```
-/// use std::sync::Arc;
-/// use brz_http_server::FromState;
-///
-/// #[derive(FromState)]
-/// struct Api {
-///     state: Arc<String>,
-/// }
-///
-/// let state = Arc::new(String::from("example"));
-/// let api = Api::from_state(&state);
-/// assert!(Arc::ptr_eq(&state, &api.state));
-/// ```
-///
-/// A state that cannot be cloned needs a manual constructor or a shared owner:
-///
-/// ```compile_fail,E0277
-/// #[derive(brz_http_server::FromState)]
-/// struct Api {
-///     state: std::sync::Mutex<u32>,
-/// }
-/// ```
-pub trait FromState<S>: Sized {
-    fn from_state(state: &S) -> Self;
-}
-
-/// The typed registration emitted by `#[api]` for a handler collection.
+/// The typed registration emitted by function API macros for a handler collection.
 #[doc(hidden)]
 pub struct ApiRegistration<S, A: Authenticator> {
     pub name: &'static str,
@@ -134,7 +100,7 @@ fn equivalent_shape(left: &str, right: &str) -> bool {
     }
 }
 
-// Templates have already been validated by #[api]: parameters consume one
+// Templates have already been validated by route macros: parameters consume one
 // nonempty segment, and a terminal catch-all accepts any remaining suffix,
 // including an absent suffix. Preserve empty literal segments to mirror routing.
 fn patterns_overlap(left: &str, right: &str) -> bool {

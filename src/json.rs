@@ -107,7 +107,7 @@ impl ApiError {
     }
 }
 
-/// Default result type for business methods exported through `#[api]`.
+/// Default result type for business functions exported through function API macros.
 pub type ApiResult<T> = std::result::Result<T, ApiError>;
 
 impl IntoHttpError for ApiError {

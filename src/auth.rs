@@ -84,7 +84,7 @@ pub trait Authenticator: Send + Sync + 'static {
 
 /// The identity produced by a successful [`Authenticator`].
 ///
-/// `Authenticated<T>` is injected by `#[api]` for a route declared with
+/// `Authenticated<T>` is injected by function API macros for a route declared with
 /// `auth = required` or `auth = optional`. Its field is private so normal
 /// business code consumes authentication context rather than constructing it.
 #[derive(Debug)]

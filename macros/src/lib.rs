@@ -2,75 +2,65 @@
 use proc_macro::TokenStream;
 
 mod expand;
-mod from_state;
 mod registry;
 
-/// Constructs an API by cloning its sole named `state` field.
-#[proc_macro_derive(FromState)]
-pub fn derive_from_state(input: TokenStream) -> TokenStream {
-    from_state::expand(input)
-}
-
-/// Declares an application registry with concrete state and authenticator types.
+/// Declares an application registry with named dependency types and a concrete authenticator.
 #[proc_macro]
 pub fn registry(input: TokenStream) -> TokenStream {
     registry::declare(input)
 }
 
-/// Builds registered API instances from application state once at startup.
+/// Collects function APIs with named dependencies once at startup.
 #[proc_macro]
 pub fn handlers(input: TokenStream) -> TokenStream {
     registry::collect(input)
 }
 
-/// Generates the internal `Handler` implementation for one business API type.
-///
-/// APIs register in the default group unless `group` selects another group or
-/// `register = false` opts out. Registered APIs implement `FromState` for the
-/// group's state type.
+/// Exports an async free function with static HTTP adaptation.
+/// Free functions use `#[inject(name)]` for named registry dependencies.
 #[proc_macro_attribute]
-pub fn api(arguments: TokenStream, input: TokenStream) -> TokenStream {
-    expand::expand(arguments, input)
+pub fn get(arguments: TokenStream, input: TokenStream) -> TokenStream {
+    expand::expand_function("GET", arguments, input)
 }
 
-/// Route marker consumed by [`api`].
+/// Exports an async free function with static HTTP adaptation.
+/// Free functions use `#[inject(name)]` for named registry dependencies.
 #[proc_macro_attribute]
-pub fn get(_arguments: TokenStream, input: TokenStream) -> TokenStream {
-    input
+pub fn post(arguments: TokenStream, input: TokenStream) -> TokenStream {
+    expand::expand_function("POST", arguments, input)
 }
 
-/// Route marker consumed by [`api`].
+/// Exports an async free function with static HTTP adaptation.
+/// Free functions use `#[inject(name)]` for named registry dependencies.
 #[proc_macro_attribute]
-pub fn post(_arguments: TokenStream, input: TokenStream) -> TokenStream {
-    input
+pub fn put(arguments: TokenStream, input: TokenStream) -> TokenStream {
+    expand::expand_function("PUT", arguments, input)
 }
 
-/// Route marker consumed by [`api`].
+/// Exports an async free function with static HTTP adaptation.
+/// Free functions use `#[inject(name)]` for named registry dependencies.
 #[proc_macro_attribute]
-pub fn put(_arguments: TokenStream, input: TokenStream) -> TokenStream {
-    input
+pub fn patch(arguments: TokenStream, input: TokenStream) -> TokenStream {
+    expand::expand_function("PATCH", arguments, input)
 }
 
-/// Route marker consumed by [`api`].
+/// Exports an async free function with static HTTP adaptation.
+/// Free functions use `#[inject(name)]` for named registry dependencies.
 #[proc_macro_attribute]
-pub fn patch(_arguments: TokenStream, input: TokenStream) -> TokenStream {
-    input
+pub fn delete(arguments: TokenStream, input: TokenStream) -> TokenStream {
+    expand::expand_function("DELETE", arguments, input)
 }
 
-/// Route marker consumed by [`api`].
+/// Exports an async free function with static HTTP adaptation.
+/// Free functions use `#[inject(name)]` for named registry dependencies.
 #[proc_macro_attribute]
-pub fn delete(_arguments: TokenStream, input: TokenStream) -> TokenStream {
-    input
+pub fn head(arguments: TokenStream, input: TokenStream) -> TokenStream {
+    expand::expand_function("HEAD", arguments, input)
 }
 
-/// Route marker consumed by [`api`].
+/// Exports an async free function with static HTTP adaptation.
+/// Free functions use `#[inject(name)]` for named registry dependencies.
 #[proc_macro_attribute]
-pub fn head(_arguments: TokenStream, input: TokenStream) -> TokenStream {
-    input
-}
-
-/// Route marker consumed by [`api`].
-#[proc_macro_attribute]
-pub fn options(_arguments: TokenStream, input: TokenStream) -> TokenStream {
-    input
+pub fn options(arguments: TokenStream, input: TokenStream) -> TokenStream {
+    expand::expand_function("OPTIONS", arguments, input)
 }

@@ -1,15 +1,15 @@
 # Flat router with bucket indexes
 
-`Router<A>` stores API instances in one vector. Its type depends only on the
-listener authenticator, so adding APIs does not deepen the handler/future type.
-The public `Router::new(api).merge(api)` spelling stays the same. Explicit old
-`Router<L, R>` annotations need to become `Router<A>` (or plain `Router` for
-`NoAuthenticator`). Each API continues to own its independently typed state.
+`Router<A>` stores endpoint adapters in one vector. Its type depends only on the
+listener authenticator, so adding routes does not deepen the handler/future type.
+`handlers!` collects function APIs; `Router::new(handler).merge(handler)` also
+supports handwritten handlers and merging collected routers. Function adapters
+within a group share one container of named dependencies.
 
 ## Registration and indexing
 
-The existing `#[api]` macro emits a descriptor per path/method group and an
-API-local group dispatcher. A descriptor contains the template, methods,
+Each function route macro emits a path/method descriptor and an
+endpoint dispatcher. A descriptor contains the template, methods,
 priority and fixed metric factory. `merge` appends descriptors and one boxed API
 instance. Merging another Router moves its entries into the destination and
 rebases handler identifiers; it never retains a nested Router as a handler.
@@ -61,8 +61,8 @@ routing or a guaranteed end-to-end throughput increase.
 Handwritten Handler implementations continue to work directly with Server.
 When merged, implementations without descriptors use their existing priority,
 metrics and method hooks as a compatibility path. They are queried separately;
-the no-repeat guarantee applies to indexed macro APIs. Single macro APIs passed
-directly to Server retain their existing static dispatch implementation.
+the no-repeat guarantee applies to indexed function APIs. Generated adapters
+call their business functions directly after extraction.
 
 ## Validation
 

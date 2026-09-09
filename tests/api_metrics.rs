@@ -4,51 +4,43 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use brz_http_server::{Handler, Response, Router, Server, ServerConfig, StatusCode, api};
+use brz_http_server::{Handler, Response, Server, ServerConfig, StatusCode};
 use brz_metrics::MetricSnapshot;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 
-struct StatusApi;
-
-#[api(prefix = "/metric-test", register = false)]
-impl StatusApi {
-    #[brz_http_server::get("/:code")]
-    async fn status(&self, code: u16) -> Response {
-        Response::empty(StatusCode::from_u16(code).unwrap())
-    }
-
-    #[brz_http_server::post("/:code")]
-    async fn create(&self, code: u16) -> Response {
-        Response::empty(StatusCode::from_u16(code).unwrap())
-    }
-
-    #[brz_http_server::get("/secure", auth = required)]
-    async fn secure(&self) -> StatusCode {
-        StatusCode::OK
-    }
-
-    #[brz_http_server::get("/slow")]
-    async fn slow(&self) -> StatusCode {
-        std::future::pending().await
-    }
-
-    #[brz_http_server::get("/invalid-json")]
-    async fn invalid_json(&self) -> BTreeMap<Vec<u8>, u8> {
-        [(vec![1, 2], 3)].into_iter().collect()
-    }
+#[brz_http_server::get("/metric-test/:code")]
+async fn status(code: u16) -> Response {
+    Response::empty(StatusCode::from_u16(code).unwrap())
 }
 
-struct StaticApi;
-
-#[api(prefix = "/metric-test", register = false)]
-impl StaticApi {
-    #[brz_http_server::get("/special")]
-    async fn special(&self) -> StatusCode {
-        StatusCode::SEE_OTHER
-    }
+#[brz_http_server::post("/metric-test/:code")]
+async fn create(code: u16) -> Response {
+    Response::empty(StatusCode::from_u16(code).unwrap())
 }
+
+#[brz_http_server::get("/metric-test/secure", auth = required)]
+async fn secure() -> StatusCode {
+    StatusCode::OK
+}
+
+#[brz_http_server::get("/metric-test/slow")]
+async fn slow() -> StatusCode {
+    std::future::pending().await
+}
+
+#[brz_http_server::get("/metric-test/invalid-json")]
+async fn invalid_json() -> BTreeMap<Vec<u8>, u8> {
+    [(vec![1, 2], 3)].into_iter().collect()
+}
+
+#[brz_http_server::get("/metric-test/special")]
+async fn special() -> StatusCode {
+    StatusCode::SEE_OTHER
+}
+
+brz_http_server::registry!();
 
 fn snapshots() -> BTreeMap<String, MetricSnapshot> {
     let mut metrics = BTreeMap::new();
@@ -75,7 +67,7 @@ async fn exported_routes_have_fixed_api_metrics_for_final_status_classes() {
         request_timeout: Duration::from_millis(100),
         ..ServerConfig::default()
     };
-    let handler = Router::new(StatusApi).merge(StaticApi);
+    let handler = brz_http_server::handlers!().unwrap();
     let server = Server::bind_with_config("127.0.0.1:0".parse().unwrap(), handler, config)
         .await
         .unwrap();
@@ -94,7 +86,7 @@ async fn exported_routes_have_fixed_api_metrics_for_final_status_classes() {
         }
     }
     // Repeated registration, including a shared path with two methods, deduplicates slots.
-    <StatusApi as Handler>::register_metrics(&StatusApi);
+    brz_http_server::handlers!().unwrap().register_metrics();
     assert_eq!(snapshots().len(), initial.len());
 
     let address = server.local_addr().unwrap();

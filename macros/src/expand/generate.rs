@@ -42,7 +42,7 @@ fn method_arms(group: &RouteGroup, server: &TokenStream2) -> Vec<TokenStream2> {
             .parameters
             .iter()
             .map(|parameter| expand_parameter(parameter, server));
-        let arguments = endpoint.parameters.iter().map(|parameter| &parameter.ident);
+        let arguments = endpoint.parameters.iter().map(|parameter| &parameter.binding);
         let handler = &endpoint.handler;
         let authentication = expand_authentication(endpoint, server);
         let content_type_check = endpoint.has_json_body.then(|| {
@@ -56,10 +56,10 @@ fn method_arms(group: &RouteGroup, server: &TokenStream2) -> Vec<TokenStream2> {
         });
         let response = match endpoint.result {
             ResultKind::Value => quote! {
-                #server::__private::response(self.#handler(#(#arguments),*).await, __http_request.response_arena())
+                #server::__private::response(#handler(#(#arguments),*).await, __http_request.response_arena())
             },
             ResultKind::Result => quote! {
-                #server::__private::result_response(self.#handler(#(#arguments),*).await, __http_request.response_arena())
+                #server::__private::result_response(#handler(#(#arguments),*).await, __http_request.response_arena())
             },
         };
         quote! {
@@ -84,7 +84,7 @@ fn expand_authentication(endpoint: &Endpoint, server: &TokenStream2) -> TokenStr
         (AuthMode::None, None) => quote! {},
         (AuthMode::None, Some(_)) => unreachable!("auth parameters are validated during parsing"),
         (AuthMode::Required, Some(parameter)) => {
-            let ident = &parameter.ident;
+            let ident = &parameter.binding;
             let ty = &parameter.ty;
             quote! {
                 let #ident: #ty = match #server::__private::authenticate_required(
@@ -100,7 +100,7 @@ fn expand_authentication(endpoint: &Endpoint, server: &TokenStream2) -> TokenStr
             }
         }
         (AuthMode::Optional, Some(parameter)) => {
-            let ident = &parameter.ident;
+            let ident = &parameter.binding;
             let ty = &parameter.ty;
             quote! {
                 let #ident: #ty = match #server::__private::authenticate_optional(
@@ -140,10 +140,11 @@ fn expand_authentication(endpoint: &Endpoint, server: &TokenStream2) -> TokenStr
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn expand_parameter(parameter: &Parameter, server: &TokenStream2) -> TokenStream2 {
-    let ident = &parameter.ident;
+    let ident = &parameter.binding;
     let ty = &parameter.ty;
-    let name = LitStr::new(&ident.to_string(), proc_macro2::Span::call_site());
+    let name = LitStr::new(&parameter.ident.to_string(), proc_macro2::Span::call_site());
     let (kind, input) = match &parameter.source {
         ParameterSource::Path(index) => (quote! { Path }, quote! { __http_match.capture(#index) }),
         ParameterSource::Query { .. }
@@ -160,6 +161,13 @@ fn expand_parameter(parameter: &Parameter, server: &TokenStream2) -> TokenStream
     };
     let failure = quote! { return __http_request.reject(#server::Rejection::new(#server::RejectionKind::#kind, #name, #input, error.to_string())); };
     match &parameter.source {
+        ParameterSource::Injected(dependency) => {
+            if matches!(ty, syn::Type::Reference(_)) {
+                quote! { let #ident: #ty = &self.__http_dependencies.#dependency; }
+            } else {
+                quote! { let #ident: #ty = ::core::clone::Clone::clone(&self.__http_dependencies.#dependency); }
+            }
+        }
         ParameterSource::Path(index) => {
             quote! {
                 let #ident: #ty = match #server::__private::path(
@@ -220,7 +228,7 @@ fn expand_parameter(parameter: &Parameter, server: &TokenStream2) -> TokenStream
             }
         }
         ParameterSource::QueryMany(inner) => {
-            let key = LitStr::new(&ident.to_string(), proc_macro2::Span::call_site());
+            let key = LitStr::new(&parameter.ident.to_string(), proc_macro2::Span::call_site());
             quote! {
                 let #ident: #ty = match #server::__private::query_many::<#inner>(&__http_query, #key) {
                     Ok(value) => value,
@@ -244,9 +252,9 @@ fn expand_body_parameter(
     server: &TokenStream2,
     failure: &TokenStream2,
 ) -> TokenStream2 {
-    let ident = &parameter.ident;
+    let ident = &parameter.binding;
     let ty = &parameter.ty;
-    let name = LitStr::new(&ident.to_string(), proc_macro2::Span::call_site());
+    let name = LitStr::new(&parameter.ident.to_string(), proc_macro2::Span::call_site());
     match &parameter.source {
         ParameterSource::FormBody => quote! {
             let #ident: #ty = match #server::__private::form(__http_request.body(), __http_request.header("content-type")) {
