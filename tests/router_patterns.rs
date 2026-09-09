@@ -9,7 +9,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use brz_http_server::{Handler, Router, Server, api};
+use brz_http_server::{Handler, Router, Server};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -17,33 +17,34 @@ use tokio::{
     task::JoinHandle,
 };
 
-macro_rules! fixture_api {
-    ($name:ident, $marker:literal, $prefix:literal, $path:literal, $parameter:ident: $ty:ty) => {
-        struct $name(Arc<AtomicUsize>);
+brz_http_server::registry!(group = static_neighbors);
 
-        #[api(prefix = $prefix, register = false)]
-        impl $name {
-            #[brz_http_server::get($path)]
-            async fn read(&self, $parameter: $ty) -> (usize, String) {
+macro_rules! fixture_api {
+    ($name:ident, $marker:literal, $path:literal, $parameter:ident: $ty:ty) => {
+        mod $name {
+            use super::*;
+            brz_http_server::registry!(dependencies(calls: Arc<AtomicUsize>));
+            #[brz_http_server::get($path, group = crate::$name::http_apis)]
+            async fn read(#[inject(calls)] calls: &AtomicUsize, $parameter: $ty) -> (usize, String) {
                 tokio::task::yield_now().await;
-                self.0.fetch_add(1, Ordering::Relaxed);
+                calls.fetch_add(1, Ordering::Relaxed);
                 ($marker, $parameter.to_string())
             }
         }
     };
 }
 
-fixture_api!(ParcelApi, 0, "/svc", "/parcels/:parcel_id", parcel_id: i64);
-fixture_api!(BatchEntriesApi, 1, "/svc", "/parcels/batch/:batch_id/entries", batch_id: i64);
-fixture_api!(SessionJournalApi, 2, "/svc", "/internal/journal/session/:session_key", session_key: &str);
-fixture_api!(PageTextApi, 3, "/svc", "/library/pages/:page_key/text", page_key: &str);
-fixture_api!(JobApi, 4, "/svc", "/jobs/:job_id", job_id: i64);
-fixture_api!(NodeHealthApi, 5, "/svc", "/jobs/:job_id/remote-node/health", job_id: i64);
-fixture_api!(NodeFilesApi, 6, "/svc", "/jobs/:job_id/remote-node/files", job_id: u64);
-fixture_api!(EnvironmentApi, 7, "/svc", "/jobs/:job_id/environment-check", job_id: i64);
-fixture_api!(JobToolsApi, 8, "/svc", "/jobs/:job_id/tools", job_id: i64);
-fixture_api!(ToolPackageApi, 9, "/svc/v2", "/catalog/tools/:tool_id/package", tool_id: i32);
-fixture_api!(EventApi, 10, "/svc/v2", "/events/:event_key", event_key: &str);
+fixture_api!(parcel_api, 0, "/svc/parcels/:parcel_id", parcel_id: i64);
+fixture_api!(batch_entries_api, 1, "/svc/parcels/batch/:batch_id/entries", batch_id: i64);
+fixture_api!(session_journal_api, 2, "/svc/internal/journal/session/:session_key", session_key: &str);
+fixture_api!(page_text_api, 3, "/svc/library/pages/:page_key/text", page_key: &str);
+fixture_api!(job_api, 4, "/svc/jobs/:job_id", job_id: i64);
+fixture_api!(node_health_api, 5, "/svc/jobs/:job_id/remote-node/health", job_id: i64);
+fixture_api!(node_files_api, 6, "/svc/jobs/:job_id/remote-node/files", job_id: u64);
+fixture_api!(environment_api, 7, "/svc/jobs/:job_id/environment-check", job_id: i64);
+fixture_api!(job_tools_api, 8, "/svc/jobs/:job_id/tools", job_id: i64);
+fixture_api!(tool_package_api, 9, "/svc/v2/catalog/tools/:tool_id/package", tool_id: i32);
+fixture_api!(event_api, 10, "/svc/v2/events/:event_key", event_key: &str);
 
 #[derive(Clone, Copy)]
 enum ValueKind {
@@ -71,17 +72,17 @@ const CASES: [(&str, ValueKind); 11] = [
 
 fn fixture_router(reverse: bool, calls: &Arc<AtomicUsize>) -> Router {
     let mut groups = vec![
-        Router::new(ParcelApi(calls.clone())),
-        Router::new(BatchEntriesApi(calls.clone())),
-        Router::new(SessionJournalApi(calls.clone())),
-        Router::new(PageTextApi(calls.clone())),
-        Router::new(JobApi(calls.clone())),
-        Router::new(NodeHealthApi(calls.clone())),
-        Router::new(NodeFilesApi(calls.clone())),
-        Router::new(EnvironmentApi(calls.clone())),
-        Router::new(JobToolsApi(calls.clone())),
-        Router::new(ToolPackageApi(calls.clone())),
-        Router::new(EventApi(calls.clone())),
+        brz_http_server::handlers!(calls = calls.clone(); group = crate::parcel_api::http_apis).unwrap(),
+        brz_http_server::handlers!(calls = calls.clone(); group = crate::batch_entries_api::http_apis).unwrap(),
+        brz_http_server::handlers!(calls = calls.clone(); group = crate::session_journal_api::http_apis).unwrap(),
+        brz_http_server::handlers!(calls = calls.clone(); group = crate::page_text_api::http_apis).unwrap(),
+        brz_http_server::handlers!(calls = calls.clone(); group = crate::job_api::http_apis).unwrap(),
+        brz_http_server::handlers!(calls = calls.clone(); group = crate::node_health_api::http_apis).unwrap(),
+        brz_http_server::handlers!(calls = calls.clone(); group = crate::node_files_api::http_apis).unwrap(),
+        brz_http_server::handlers!(calls = calls.clone(); group = crate::environment_api::http_apis).unwrap(),
+        brz_http_server::handlers!(calls = calls.clone(); group = crate::job_tools_api::http_apis).unwrap(),
+        brz_http_server::handlers!(calls = calls.clone(); group = crate::tool_package_api::http_apis).unwrap(),
+        brz_http_server::handlers!(calls = calls.clone(); group = crate::event_api::http_apis).unwrap(),
     ];
     if reverse {
         groups.reverse();
@@ -235,23 +236,19 @@ async fn malformed_shapes_and_wrong_methods_never_invoke_business_handlers() {
     server.stop().await;
 }
 
-struct StaticNeighbors;
-#[api(prefix = "/svc", register = false)]
-impl StaticNeighbors {
-    #[brz_http_server::get("/jobs/search")]
-    async fn search(&self) -> &'static str {
-        "static-search"
-    }
+#[brz_http_server::get("/svc/jobs/search", group = static_neighbors)]
+async fn search() -> &'static str {
+    "static-search"
+}
 
-    #[brz_http_server::get("/jobs/42/remote-node/health")]
-    async fn health(&self) -> &'static str {
-        "static-health"
-    }
+#[brz_http_server::get("/svc/jobs/42/remote-node/health", group = static_neighbors)]
+async fn health() -> &'static str {
+    "static-health"
+}
 
-    #[brz_http_server::post("/jobs/42/tools")]
-    async fn tools(&self) -> &'static str {
-        "static-tools-post"
-    }
+#[brz_http_server::post("/svc/jobs/42/tools", group = static_neighbors)]
+async fn tools() -> &'static str {
+    "static-tools-post"
 }
 
 #[tokio::test]
@@ -260,9 +257,11 @@ async fn shared_prefixes_and_suffixes_do_not_steal_each_others_routes() {
         let calls = Arc::new(AtomicUsize::new(0));
         let dynamic = fixture_router(false, &calls);
         let router = if static_first {
-            Router::new(StaticNeighbors).merge(dynamic)
+            brz_http_server::handlers!(; group = static_neighbors)
+                .unwrap()
+                .merge(dynamic)
         } else {
-            dynamic.merge(StaticNeighbors)
+            dynamic.merge(brz_http_server::handlers!(; group = static_neighbors).unwrap())
         };
         let server = Running::start(router).await;
         for (path, value) in [

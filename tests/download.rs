@@ -8,59 +8,57 @@ use std::time::Duration;
 
 use brz_http_server::{
     Bytes, Handler, HttpResponse, IntoHttpResponse, NoAuthenticator, Request, Response, Server,
-    ServerConfig, StatusCode, Stream, api,
+    ServerConfig, StatusCode, Stream,
 };
+brz_http_server::registry!();
+
 use futures_util::stream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{Notify, oneshot};
 
-struct Downloads;
-#[api(register = false)]
-impl Downloads {
-    #[brz_http_server::get("/file")]
-    async fn file(&self) -> impl Stream<Item = Result<Bytes, Infallible>> + Send + 'static {
-        stream::iter([
-            Ok(Bytes::from_static(b"hello")),
-            Ok(Bytes::new()),
-            Ok(Bytes::from_static(b"\0\xffworld")),
-        ])
-    }
-    #[brz_http_server::get("/range")]
-    async fn range(&self) -> HttpResponse<impl Stream<Item = io::Result<Bytes>> + Send + 'static> {
-        HttpResponse::new(stream::iter([Ok(Bytes::from_static(b"xyz"))]))
-            .status(StatusCode::PARTIAL_CONTENT)
-            .content_length(3)
-            .header("content-type", "video/mp4")
-            .unwrap()
-            .header("content-range", "bytes 2-4/9")
-            .unwrap()
-            .header("content-disposition", "attachment; filename=video.mp4")
-            .unwrap()
-    }
-    #[brz_http_server::get("/short")]
-    async fn short(&self) -> HttpResponse<impl Stream<Item = io::Result<Bytes>> + Send + 'static> {
-        HttpResponse::new(stream::iter([Ok(Bytes::from_static(b"abc"))])).content_length(4)
-    }
-    #[brz_http_server::get("/long")]
-    async fn long(&self) -> HttpResponse<impl Stream<Item = io::Result<Bytes>> + Send + 'static> {
-        HttpResponse::new(stream::iter([
-            Ok(Bytes::from_static(b"abc")),
-            Ok(Bytes::from_static(b"overflow")),
-        ]))
-        .content_length(4)
-    }
-    #[brz_http_server::get("/error")]
-    async fn error(&self) -> impl Stream<Item = io::Result<Bytes>> + Send + 'static {
-        stream::iter([
-            Ok(Bytes::from_static(b"abc")),
-            Err(io::Error::other("upstream failed")),
-        ])
-    }
-    #[brz_http_server::get("/empty")]
-    async fn empty(&self) -> impl Stream<Item = io::Result<Bytes>> + Send + 'static {
-        stream::empty()
-    }
+#[brz_http_server::get("/file")]
+async fn file() -> impl Stream<Item = Result<Bytes, Infallible>> + Send + 'static {
+    stream::iter([
+        Ok(Bytes::from_static(b"hello")),
+        Ok(Bytes::new()),
+        Ok(Bytes::from_static(b"\0\xffworld")),
+    ])
+}
+#[brz_http_server::get("/range")]
+async fn range() -> HttpResponse<impl Stream<Item = io::Result<Bytes>> + Send + 'static> {
+    HttpResponse::new(stream::iter([Ok(Bytes::from_static(b"xyz"))]))
+        .status(StatusCode::PARTIAL_CONTENT)
+        .content_length(3)
+        .header("content-type", "video/mp4")
+        .unwrap()
+        .header("content-range", "bytes 2-4/9")
+        .unwrap()
+        .header("content-disposition", "attachment; filename=video.mp4")
+        .unwrap()
+}
+#[brz_http_server::get("/short")]
+async fn short() -> HttpResponse<impl Stream<Item = io::Result<Bytes>> + Send + 'static> {
+    HttpResponse::new(stream::iter([Ok(Bytes::from_static(b"abc"))])).content_length(4)
+}
+#[brz_http_server::get("/long")]
+async fn long() -> HttpResponse<impl Stream<Item = io::Result<Bytes>> + Send + 'static> {
+    HttpResponse::new(stream::iter([
+        Ok(Bytes::from_static(b"abc")),
+        Ok(Bytes::from_static(b"overflow")),
+    ]))
+    .content_length(4)
+}
+#[brz_http_server::get("/error")]
+async fn error() -> impl Stream<Item = io::Result<Bytes>> + Send + 'static {
+    stream::iter([
+        Ok(Bytes::from_static(b"abc")),
+        Err(io::Error::other("upstream failed")),
+    ])
+}
+#[brz_http_server::get("/empty")]
+async fn empty() -> impl Stream<Item = io::Result<Bytes>> + Send + 'static {
+    stream::empty()
 }
 
 async fn start<H: Handler>(
@@ -87,7 +85,7 @@ async fn start<H: Handler>(
 }
 
 async fn exchange(path: &str) -> Vec<u8> {
-    let (addr, tx, task) = start(Downloads).await;
+    let (addr, tx, task) = start(brz_http_server::handlers!().unwrap()).await;
     let mut socket = TcpStream::connect(addr).await.unwrap();
     socket
         .write_all(
@@ -272,7 +270,7 @@ async fn head_and_no_content_do_not_poll_upstream() {
 
 #[tokio::test]
 async fn chunked_response_completes_before_next_pipelined_response() {
-    let (addr, tx, task) = start(Downloads).await;
+    let (addr, tx, task) = start(brz_http_server::handlers!().unwrap()).await;
     let mut socket = TcpStream::connect(addr).await.unwrap();
     socket.write_all(b"GET /empty HTTP/1.1\r\nHost: test\r\n\r\nGET /range HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n").await.unwrap();
     let mut wire = Vec::new();

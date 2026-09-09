@@ -37,198 +37,136 @@ SSE-specific behavior, and WebSockets remain outside this release.
 
 ## API macros
 
-Enable the `macros` feature and define APIs in business terms. `Request` stays
-inside generated transport code. `#[api]` registers in the default group;
-declare the group as shown under **Composing API groups**. The standalone
-examples use `register = false` for manually constructed handlers.
+Enable the `macros` feature. Define one async free function per route and use
+ordinary Rust modules to organize related endpoints. Each function declares its
+full path, authentication policy, HTTP inputs, injected dependencies, and output.
+`#[api] impl` and `FromState` are no longer supported.
 
-```toml
-[dependencies]
-brz-http-server = { version = "0.0.7", features = ["macros"] }
-serde = { version = "1", features = ["derive"] }
+Declare dependency names and types once for each listener group:
+
+```rust
+use brz_http_server::{get, handlers, registry};
+use std::sync::Arc;
+
+struct AppState { name: String }
+struct UserService;
+
+registry!(dependencies(state: Arc<AppState>, users: Arc<UserService>));
+
+#[get("/info/name")]
+async fn name<'a>(#[inject(state)] application: &'a AppState) -> &'a str {
+    &application.name
+}
+
+#[get("/health")]
+async fn health() -> bool { true }
+
+fn main() {
+    let app_state = Arc::new(AppState { name: "example".into() });
+    let user_service = Arc::new(UserService);
+    let handler = handlers!(state = app_state, users = user_service).unwrap();
+    // Pass handler to Server::bind(address, handler).await.
+    drop(handler);
+}
 ```
 
-`prefix`, `consumes`, `produces`, and `auth` belong on the API and default to
-`""`, `json`, `json`, and `none`. Method options inherit API values and may
-override either codec or auth mode. `protobuf` is reserved for a later codec
-implementation.
+`handlers!(state, users)` is shorthand for
+`handlers!(state = state, users = users)`. Argument order does not affect matching.
+Each value expression is evaluated once and moved into a shared container; its
+fields do not need to implement `Clone`. Use `Arc<T>` when the caller also needs
+shared ownership. Dependencies must be `Send + Sync + 'static` when serving routes.
+Initialize fallible or async dependencies before calling `handlers!`.
+
+Always mark injected parameters with `#[inject(dependency_name)]`. The parameter's
+local name is independent of the dependency name. `&T` borrows the stored value
+with normal Rust deref coercion (for example, `Arc<T>` to `&T`); an owned `T`
+clones that dependency using the `Clone` trait on each invocation. `&mut T` is not
+supported: shared mutable services should expose their own synchronization.
+There is no automatic matching by parameter name or type and no runtime lookup.
+
+Injected parameters can appear anywhere without occupying a path-capture position.
+Among the remaining parameters, path captures bind first in route order and must
+have the capture names. Scalars then bind query keys; one business struct binds
+the body. `headers(...)` explicitly selects header parameters.
+`Authenticated<T>` is supplied by the authentication layer. A parameter cannot
+bind both a dependency and a path capture or header. Functions remain directly
+callable with ordinary Rust arguments, including borrowed inputs and outputs.
+
+For a dependency-free group, use `registry!()` and `handlers!()`.
+Modules enroll their functions through normal `mod` inclusion, with no filesystem
+scan or module annotation. Separate listeners use explicit groups, not module
+names inferred by the macros:
+
+```rust
+use brz_http_server::{get, handlers, registry};
+registry!(group = admin, dependencies(label: String));
+
+mod endpoints {
+    #[brz_http_server::get("/admin/name", group = admin)]
+    async fn name(#[inject(label)] label: &str) -> String { label.to_owned() }
+}
+
+fn main() {
+    let handler = handlers!(label = "admin".into(); group = admin).unwrap();
+    drop(handler);
+}
+```
+
+The default group is `crate::http_apis`. A bare group name resolves from the crate
+root; a nested registry uses its full path in both the function attribute and
+`handlers!`, for example `group = crate::listeners::admin`.
+`registry!(group = admin, auth = AdminAuth, dependencies(...))` fixes that group's
+authenticator type; use `Server::bind_with_authenticator` to supply its instance.
+Set `auth = required` or `auth = optional` on each protected function. The default
+is `auth = none`; modules do not implicitly change authentication or route paths.
+`consumes` and `produces` default to `json`; `protobuf` is reserved.
+
+`handlers!` returns `Result<Router<A>, RegistryError>` and rejects conflicting
+routes before serving. Each endpoint's adapter shares the group's container.
+The existing indexed dispatch, 404/405 responses, authentication, borrowed JSON,
+streaming responses, and metrics remain available.
+
+
+A function can combine injected state with path, query, body, and header inputs:
 
 ```rust,no_run
-use brz_http_server::{ApiResult, api};
+use brz_http_server::{ApiResult, post, registry};
 use serde::{Deserialize, Serialize};
 
+struct AppState;
+registry!(dependencies(state: AppState));
+
 #[derive(Deserialize)]
-struct UpdateUser<'a> {
-    name: &'a str,
-}
-
+struct UpdateUser<'a> { name: &'a str }
 #[derive(Serialize)]
-struct UserView<'a> {
+struct UserView<'a> { id: u64, name: &'a str }
+
+#[post("/v1/users/:id", headers(trace_id = "x-trace-id"))]
+async fn update<'a>(
+    #[inject(state)] _state: &AppState,
     id: u64,
-    name: &'a str,
-}
-
-struct UserApi;
-
-#[api(prefix = "/v1/users", register = false)]
-impl UserApi {
-    #[brz_http_server::get("/:id")]
-    async fn get(&self, id: u64, verbose: Option<bool>) -> UserView<'static> {
-        let _ = verbose;
-        UserView { id, name: "read" }
-    }
-
-    #[brz_http_server::post("/:id", headers(trace_id = "x-trace-id"))]
-    async fn update<'a>(
-        &self,
-        id: u64,
-        verbose: Option<bool>,
-        input: UpdateUser<'a>,
-        trace_id: Option<&'a str>,
-    ) -> ApiResult<UserView<'a>> {
-        let _ = (verbose, trace_id);
-        Ok(UserView { id, name: input.name })
-    }
+    verbose: Option<bool>,
+    input: UpdateUser<'a>,
+    trace_id: Option<&'a str>,
+) -> ApiResult<UserView<'a>> {
+    let _ = (verbose, trace_id);
+    Ok(UserView { id, name: input.name })
 }
 ```
 
-The macro implements `Handler` with static route dispatch: there is no route
-map, boxed handler, or exposed transport request. A route's captures bind the
-first parameters in route order. Remaining scalar parameters come from query
-keys with the same name. Query values are URL-decoded, and `Vec<T>` receives
-repeated keys. A business struct binds the JSON body; `Form<T>`, `Multipart`,
-and `&[u8]` bind URL-encoded, multipart, and raw bodies respectively.
-`Authenticated<T>` is an explicit exception: it is supplied by the
-authentication layer instead of body decoding.
-`headers(...)` is explicit because a plain `&str` cannot otherwise be
-distinguished from a query parameter. Invalid parameters return `400`; a JSON
-body route rejects non-JSON `Content-Type` with `415`; an otherwise matched
-path and wrong method returns `405` with `Allow`.
+Invalid parameters return `400`; JSON body routes reject non-JSON content types
+with `415`. Query strings are URL-decoded and `Vec<T>` receives repeated keys.
+`Query<T>`, `Form<T>`, `Multipart`, `Body`, and `&[u8]` retain their existing
+query/body extraction behavior. Business failures use `ApiResult<T>` and
+`ApiError`, while custom statuses, redirects, and streams remain supported.
 
-Business failures return `ApiResult<T>`. For example,
-`Err(ApiError::forbidden("not permitted"))` produces a JSON `403 Forbidden`
-response. Use `403` only after authentication identified the caller; missing
-or invalid authentication belongs to `401 Unauthorized`.
-
-## Composing API groups
-
-Declare a group once in the application crate root, and register each API
-beside its methods. `FromState<S>` constructs API instances from the group's
-state type; it can retain shared state or select API-specific dependencies.
-
-```rust,no_run
-use std::sync::Arc;
-use brz_http_server::api;
-
-struct AppState {
-    service_name: String,
-}
-
-brz_http_server::registry!(state = Arc<AppState>);
-
-#[derive(brz_http_server::FromState)]
-struct InfoApi {
-    state: Arc<AppState>,
-}
-
-#[api(prefix = "/info")]
-impl InfoApi {
-    #[brz_http_server::get("/name")]
-    async fn name(&self) -> String {
-        self.state.service_name.clone()
-    }
-}
-
-async fn bind() -> Result<(), Box<dyn std::error::Error>> {
-    let state = Arc::new(AppState { service_name: "example".into() });
-    let handler = brz_http_server::handlers!(state)?;
-    let _server = brz_http_server::Server::bind("127.0.0.1:8080".parse()?, handler).await?;
-    Ok(())
-}
-```
-
-Use normal Rust `mod` declarations to include API modules. `#[api]` enrolls
-the API in the default group, `crate::http_apis`; it does not search source
-files. Use `register = false` to opt out. Each group uses one concrete state
-and authenticator type. For an authenticated listener,
-declare `registry!(state = Arc<AppState>, auth = AppAuth)` and pass the
-`AppAuth` instance to `Server::bind_with_authenticator`.
-
-`AppState` is an example name and can live in any module. When an API has
-exactly one named `state` field, use `#[derive(brz_http_server::FromState)]`. The
-derive infers the state type and clones it; the field may be private. Only
-the field type needs `Clone`, so `Arc<T>` works even when `T` is not `Clone`.
-Generics and existing where clauses are preserved.
-
-For APIs with additional fields or custom construction, implement `FromState<S>`
-manually and omit the derive. Manual implementations can use any field layout.
-The declared group state type must match `S`.
-
-To bind a second group on another address, name the group on the API and pass
-that name as the second argument to `handlers!`. Groups can use different
-authenticator types. This example keeps the public default group above and
-adds an authenticated admin listener:
-
-```rust,ignore
-brz_http_server::registry!(group = admin, state = Arc<AppState>, auth = AdminAuth);
-
-#[brz_http_server::api(prefix = "/admin", group = admin, auth = required)]
-impl AdminApi {
-    // Annotated methods; AdminApi implements FromState<Arc<AppState>>.
-}
-
-let public_server = brz_http_server::Server::bind(
-    "0.0.0.0:8080".parse()?,
-    brz_http_server::handlers!(state)?,
-).await?;
-let admin_server = brz_http_server::Server::bind_with_authenticator(
-    "127.0.0.1:9090".parse()?,
-    brz_http_server::handlers!(state, admin)?,
-    admin_auth,
-).await?;
-```
-
-The short group name resolves from the crate root. For a group declared in a
-nested module, use the same explicit path in both places:
-`#[api(group = crate::listeners::admin)]` and
-`handlers!(state, crate::listeners::admin)?`. Serve both listeners under the
-application's shutdown lifecycle.
-
-`handlers!` returns `Result<Router<A>, RegistryError>`. It constructs APIs once
-at startup and rejects equal-priority routes whose paths and methods overlap;
-registration order does not choose between conflicting handlers. Initialize
-fallible or asynchronous dependencies before calling it. Generic implementations
-need concrete specialization to register; use `register = false` when
-constructing and merging generic API instances manually.
-
-`#[api(register = false)]` types are explicitly composable without a group
-declaration or `FromState` implementation. A collected group can be merged
-with a manually constructed readiness API that uses `register = false`:
-
-```rust,ignore
-let handler = brz_http_server::Router::new(readiness_api)
-    .merge(brz_http_server::handlers!(state)?);
-```
-
-`Router<A>` has a fixed type for each authenticator, regardless of how many API
-instances are merged. Each API retains its own state type. Merging routers
-flattens their entries. Do not manually merge an API that is also registered.
-
-At startup, static paths are bucketed by byte length and parameter paths by
-segment count; catch-all routes are handled separately. The server selects the
-route once before reading the body, shares that selection with metrics, and
-invokes the selected API group directly. The composition boundary boxes the
-selected handler Future once per invocation. A standalone macro API retains
-static dispatch without that adapter.
-
-See [the router design](docs/router-buckets.md) for matching compatibility,
-index layout, allocation tradeoffs and validation.
+See [the function API guide](docs/function-api.md) for compile-time diagnostics
+and [the router design](docs/router-buckets.md) for matching and allocation details.
 
 ## Authentication
 
 Authentication is a typed API context, not a raw `Authorization` header in a
-business method. API auth defaults to `none`; use `required` at API scope and
-override an individual public route with `auth = none`. `auth = optional`
+business method. Function auth defaults to `none`; set `auth = required` on each protected route. `auth = optional`
 injects an `Option<Authenticated<T>>`; it treats absent credentials as `None`
 but rejects malformed credentials with `401`.
 
@@ -236,7 +174,7 @@ but rejects malformed credentials with `401`.
 use std::future::Future;
 
 use brz_http_server::{
-    AuthFailure, AuthRequest, Authenticated, Authenticator, api,
+    AuthFailure, AuthRequest, Authenticated, Authenticator,
 };
 use serde::Serialize;
 
@@ -275,24 +213,19 @@ struct HealthView {
     ok: bool,
 }
 
-struct UserApi;
+brz_http_server::registry!(auth = InternalAuth);
 
-#[api(prefix = "/v1/users", auth = required, register = false)]
-impl UserApi {
-    #[brz_http_server::get("/:id")]
-    async fn get(&self, id: u64, actor: Authenticated<Actor>) -> UserView {
-        let _caller = actor.principal().user_id;
-        UserView { id }
-    }
-
-    #[brz_http_server::get("/health", auth = none)]
-    async fn health(&self) -> HealthView {
-        HealthView { ok: true }
-    }
+#[brz_http_server::get("/v1/users/:id", auth = required)]
+async fn get(id: u64, actor: Authenticated<Actor>) -> UserView {
+    let _caller = actor.principal().user_id;
+    UserView { id }
 }
+
+#[brz_http_server::get("/v1/users/health")]
+async fn health() -> HealthView { HealthView { ok: true } }
 ```
 
-Start it with `Server::bind_with_authenticator(addr, UserApi, InternalAuth).await?`.
+Start it with `Server::bind_with_authenticator(addr, handlers!()?, InternalAuth).await?`.
 
 `AuthRequest` exposes only method, path, headers, and peer address; the body
 remains unavailable to authentication. An authenticator must return an owned
@@ -309,9 +242,9 @@ raw body access remains available after parsing, including on rejection paths.
 
 ## API metrics
 
-Exported `#[api]` routes automatically register four `brz-metrics` entries when
+Exported function routes automatically register four `brz-metrics` entries when
 binding the server. Profile output uses type `API` and names based on the full
-route template (including its prefix):
+route template:
 
 ```text
 /users/:id_2xx
@@ -354,7 +287,7 @@ budget.
 
 ## Download streams
 
-An annotated method may return `impl Stream<Item = Result<Bytes, E>> + Send + 'static`
+An annotated function may return `impl Stream<Item = Result<Bytes, E>> + Send + 'static`
 (`E: Display + Send + 'static`). The HTTP client's response byte stream can be
 returned directly; it must own its upstream response. The runtime writes each
 chunk as it becomes available and bounds read-ahead to one queued chunk.

@@ -1,113 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
-use syn::{
-    Attribute, FnArg, Ident, ImplItem, ImplItemFn, ItemImpl, LitStr, Pat, ReturnType, Token, Type,
-    parse_macro_input,
-};
+use syn::{Attribute, FnArg, Ident, ItemFn, LitStr, Pat, ReturnType, Token, Type};
 
+mod function;
 mod generate;
+pub(crate) use function::expand_function;
 use generate::{expand_dispatch, expand_group};
-
-pub(crate) fn expand(arguments: TokenStream, input: TokenStream) -> TokenStream {
-    let arguments = parse_macro_input!(arguments as ApiArguments);
-    let input = parse_macro_input!(input as ItemImpl);
-    expand_api(&arguments, input)
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
-}
-
-struct ApiArguments {
-    prefix: String,
-    consumes: Codec,
-    produces: Codec,
-    auth: AuthMode,
-    registry: Option<syn::Path>,
-}
-
-impl Parse for ApiArguments {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let mut prefix = String::new();
-        let mut consumes = Codec::Json;
-        let mut produces = Codec::Json;
-        let mut auth = AuthMode::None;
-        let mut registry = None;
-        let mut register = None;
-        while !input.is_empty() {
-            let name: Ident = input.parse()?;
-            if name == "register" {
-                if register.is_some() {
-                    return Err(syn::Error::new_spanned(name, "specify register only once"));
-                }
-                register = Some(if input.peek(Token![=]) {
-                    input.parse::<Token![=]>()?;
-                    input.parse::<syn::LitBool>()?.value
-                } else {
-                    true
-                });
-                if input.is_empty() {
-                    break;
-                }
-                input.parse::<Token![,]>()?;
-                continue;
-            }
-            input.parse::<Token![=]>()?;
-            if name == "registry" || name == "group" {
-                if registry.is_some() {
-                    return Err(syn::Error::new_spanned(
-                        name,
-                        "specify group or registry only once",
-                    ));
-                }
-                let path = input.parse()?;
-                registry = Some(if name == "group" {
-                    crate::registry::group_path(path)
-                } else {
-                    path
-                });
-            } else if name == "prefix" {
-                prefix = input.parse::<LitStr>()?.value();
-            } else if name == "consumes" {
-                consumes = input.parse()?;
-            } else if name == "produces" {
-                produces = input.parse()?;
-            } else if name == "auth" {
-                auth = input.parse()?;
-            } else {
-                return Err(syn::Error::new_spanned(
-                    name,
-                    "supported api options are prefix, consumes, produces, auth, register, group, and registry",
-                ));
-            }
-            if input.is_empty() {
-                break;
-            }
-            input.parse::<Token![,]>()?;
-        }
-        let registry = match (register, registry) {
-            (Some(false), Some(path)) => {
-                return Err(syn::Error::new_spanned(
-                    path,
-                    "register = false cannot be combined with group or registry",
-                ));
-            }
-            (Some(false), None) => None,
-            (_, path) => Some(path.unwrap_or_else(|| syn::parse_quote!(crate::http_apis))),
-        };
-        validate_prefix(&prefix, input.span())?;
-        Ok(Self {
-            prefix: normalize_prefix(prefix),
-            consumes,
-            produces,
-            auth,
-            registry,
-        })
-    }
-}
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Codec {
@@ -157,6 +59,7 @@ struct RouteArguments {
     produces: Option<Codec>,
     auth: Option<AuthMode>,
     headers: BTreeMap<String, LitStr>,
+    group: Option<syn::Path>,
 }
 
 impl Parse for RouteArguments {
@@ -166,8 +69,12 @@ impl Parse for RouteArguments {
         let mut produces = None;
         let mut auth = None;
         let mut headers = BTreeMap::new();
+        let mut group = None;
         while !input.is_empty() {
             input.parse::<Token![,]>()?;
+            if input.is_empty() {
+                break;
+            }
             let name: Ident = input.parse()?;
             if name == "headers" {
                 let content;
@@ -195,10 +102,12 @@ impl Parse for RouteArguments {
                     produces = Some(input.parse()?);
                 } else if name == "auth" {
                     auth = Some(input.parse()?);
+                } else if name == "group" && group.is_none() {
+                    group = Some(crate::registry::group_path(input.parse()?));
                 } else {
                     return Err(syn::Error::new_spanned(
                         name,
-                        "supported route options are consumes, produces, auth, and headers(...)",
+                        "supported route options are consumes, produces, auth, headers(...), and group (once)",
                     ));
                 }
             }
@@ -209,6 +118,7 @@ impl Parse for RouteArguments {
             produces,
             auth,
             headers,
+            group,
         })
     }
 }
@@ -216,7 +126,6 @@ impl Parse for RouteArguments {
 struct Endpoint {
     method: &'static str,
     path: String,
-    shape: String,
     handler: Ident,
     parameters: Vec<Parameter>,
     result: ResultKind,
@@ -226,11 +135,13 @@ struct Endpoint {
 
 struct Parameter {
     ident: Ident,
+    binding: Ident,
     ty: Type,
     source: ParameterSource,
 }
 
 enum ParameterSource {
+    Injected(Ident),
     Path(usize),
     Query {
         key: String,
@@ -257,55 +168,35 @@ enum ResultKind {
 }
 
 #[allow(clippy::too_many_lines)]
-fn expand_api(arguments: &ApiArguments, mut input: ItemImpl) -> syn::Result<TokenStream2> {
-    if input.trait_.is_some() {
+fn expand_adapter(
+    registry: &syn::Path,
+    input: &ItemFn,
+    route: &RouteArguments,
+    method: &'static str,
+    adapter: &Ident,
+    callable: &Ident,
+) -> syn::Result<TokenStream2> {
+    if route.consumes.unwrap_or(Codec::Json) != Codec::Json
+        || route.produces.unwrap_or(Codec::Json) != Codec::Json
+    {
         return Err(syn::Error::new_spanned(
-            &input,
-            "brz_http_server::api requires an inherent impl",
+            &route.path,
+            "protobuf API codecs are declared but not implemented yet; use json",
         ));
     }
-
-    let mut endpoints = Vec::new();
-    for item in &mut input.items {
-        let ImplItem::Fn(method) = item else {
-            continue;
-        };
-        let Some((route_method, attribute_index)) = route_attribute(&method.attrs) else {
-            continue;
-        };
-        let attribute = method.attrs.remove(attribute_index);
-        // Routes have a uniform async signature, including immediate responses.
-        method
-            .attrs
-            .push(syn::parse_quote!(#[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)]));
-        let route = attribute.parse_args::<RouteArguments>()?;
-        let consumes = route.consumes.unwrap_or(arguments.consumes);
-        let produces = route.produces.unwrap_or(arguments.produces);
-        let auth = route.auth.unwrap_or(arguments.auth);
-        if consumes != Codec::Json || produces != Codec::Json {
-            return Err(syn::Error::new_spanned(
-                attribute,
-                "protobuf API codecs are declared but not implemented yet; use json",
-            ));
-        }
-        endpoints.push(parse_endpoint(
-            route_method,
-            &arguments.prefix,
-            method,
-            &route,
-            auth,
-        )?);
-    }
-    if endpoints.is_empty() {
-        return Err(syn::Error::new_spanned(
-            &input,
-            "brz_http_server::api requires at least one #[get], #[post], #[put], #[patch], or #[delete] method",
-        ));
-    }
-
-    let groups = group_endpoints(endpoints)?;
+    let mut endpoint = parse_endpoint(method, input, route, route.auth.unwrap_or(AuthMode::None))?;
+    endpoint.handler = callable.clone();
+    let groups = [RouteGroup {
+        specificity: endpoint
+            .path
+            .split('/')
+            .filter(|segment| !segment.starts_with(':') && !segment.starts_with('*'))
+            .count(),
+        path: endpoint.path.clone(),
+        endpoints: vec![endpoint],
+    }];
     let server = server_crate_path();
-    let self_ty = &input.self_ty;
+    let self_ty = adapter;
     let route_groups = groups.iter().map(|group| expand_group(group, &server));
     let route_metadata = groups.iter().map(|group| {
         let path = &group.path;
@@ -368,7 +259,7 @@ fn expand_api(arguments: &ApiArguments, mut input: ItemImpl) -> syn::Result<Toke
         }
     });
     let principal = authentication_principal(&groups)?;
-    let mut generics = input.generics.clone();
+    let mut generics = syn::Generics::default();
     generics.params.push(syn::parse_quote!(__HttpAuthenticator));
     let bounds = generics.make_where_clause();
     bounds
@@ -385,14 +276,10 @@ fn expand_api(arguments: &ApiArguments, mut input: ItemImpl) -> syn::Result<Toke
     }
     let (impl_generics, _, where_clause) = generics.split_for_impl();
     let handler_impl = quote! { impl #impl_generics #server::Handler<__HttpAuthenticator> for #self_ty #where_clause };
-    let registration = arguments
-        .registry
-        .as_ref()
-        .map(|registry| crate::registry::registration(registry, &input, &server, &descriptors))
-        .transpose()?;
+    let registration =
+        crate::registry::registration(registry, adapter, &input.sig.ident, &server, &descriptors);
 
     Ok(quote! {
-        #input
         #registration
 
         #handler_impl {
@@ -484,15 +371,14 @@ fn route_attribute(attributes: &[Attribute]) -> Option<(&'static str, usize)> {
 #[allow(clippy::too_many_lines)]
 fn parse_endpoint(
     method: &'static str,
-    prefix: &str,
-    function: &ImplItemFn,
+    function: &ItemFn,
     route: &RouteArguments,
     auth: AuthMode,
 ) -> syn::Result<Endpoint> {
     if function.sig.asyncness.is_none() {
         return Err(syn::Error::new_spanned(
             function.sig.fn_token,
-            "HTTP API methods must be async",
+            "HTTP API functions must be async",
         ));
     }
     if function
@@ -504,31 +390,20 @@ fn parse_endpoint(
     {
         return Err(syn::Error::new_spanned(
             &function.sig.generics,
-            "HTTP API methods may have lifetime parameters but not type or const parameters",
+            "HTTP API functions may have lifetime parameters but not type or const parameters",
         ));
     }
     let endpoint_path = route.path.value();
     validate_endpoint_path(&endpoint_path, &route.path)?;
-    let path = join_path(prefix, &endpoint_path);
+    let path = endpoint_path;
     let captures = parse_captures(&path, &route.path)?;
-    let shape = route_shape(&path);
 
-    let mut inputs = function.sig.inputs.iter();
-    match inputs.next() {
-        Some(FnArg::Receiver(receiver)) if receiver.reference.is_some() => {}
-        _ => {
-            return Err(syn::Error::new_spanned(
-                &function.sig.inputs,
-                "HTTP API methods must begin with &self",
-            ));
-        }
-    }
     let mut parameters = Vec::new();
-    for argument in inputs {
+    for (index, argument) in function.sig.inputs.iter().enumerate() {
         let FnArg::Typed(argument) = argument else {
             return Err(syn::Error::new_spanned(
                 argument,
-                "HTTP API methods may only have one self receiver",
+                "HTTP route attributes require a free function without self",
             ));
         };
         let Pat::Ident(pattern) = argument.pat.as_ref() else {
@@ -541,24 +416,33 @@ fn parse_endpoint(
         syn::visit_mut::VisitMut::visit_type_mut(&mut BindingLifetimes, &mut ty);
         parameters.push(Parameter {
             ident: pattern.ident.clone(),
+            binding: Ident::new(
+                &format!("__http_argument_{index}"),
+                proc_macro2::Span::mixed_site(),
+            ),
             ty,
-            source: ParameterSource::JsonBody,
+            source: function::injection(argument)?
+                .map_or(ParameterSource::JsonBody, ParameterSource::Injected),
         });
     }
-    if parameters.len() < captures.len() {
+    let mut http_parameters: Vec<_> = parameters
+        .iter_mut()
+        .filter(|parameter| !matches!(parameter.source, ParameterSource::Injected(_)))
+        .collect();
+    if http_parameters.len() < captures.len() {
         return Err(syn::Error::new_spanned(
             &function.sig.inputs,
             "route has more path captures than method parameters",
         ));
     }
     for (index, capture) in captures.iter().enumerate() {
-        if parameters[index].ident != capture.as_str() {
+        if http_parameters[index].ident != capture.as_str() {
             return Err(syn::Error::new_spanned(
-                &parameters[index].ident,
+                &http_parameters[index].ident,
                 format!("path capture :{capture} must bind parameter {capture} in route order"),
             ));
         }
-        parameters[index].source = ParameterSource::Path(index);
+        http_parameters[index].source = ParameterSource::Path(index);
     }
 
     let parameter_names: BTreeSet<_> = parameters
@@ -575,7 +459,21 @@ fn parse_endpoint(
     }
     let mut body_index = None;
     let mut authentication_parameter = None;
-    for parameter in parameters.iter_mut().skip(captures.len()) {
+    for parameter in &mut parameters {
+        if matches!(parameter.source, ParameterSource::Injected(_)) {
+            if route.headers.contains_key(&parameter.ident.to_string())
+                || captures.iter().any(|name| parameter.ident == name.as_str())
+            {
+                return Err(syn::Error::new_spanned(
+                    &parameter.ident,
+                    "an injected dependency cannot also bind a path capture or header",
+                ));
+            }
+            continue;
+        }
+        if matches!(parameter.source, ParameterSource::Path(_)) {
+            continue;
+        }
         if authenticated_inner(&parameter.ty).is_some() {
             if route.headers.contains_key(&parameter.ident.to_string()) {
                 return Err(syn::Error::new_spanned(
@@ -631,7 +529,6 @@ fn parse_endpoint(
     Ok(Endpoint {
         method,
         path,
-        shape,
         handler: function.sig.ident.clone(),
         has_json_body: parameters
             .iter()
@@ -693,7 +590,7 @@ fn authentication_principal(groups: &[RouteGroup]) -> syn::Result<Option<Type>> 
             {
                 return Err(syn::Error::new_spanned(
                     &parameter.ty,
-                    "one #[api] impl may inject only one authenticated principal type",
+                    "an HTTP API function may inject only one authenticated principal type",
                 ));
             }
             principal_key = Some(candidate_key);
@@ -709,66 +606,11 @@ struct RouteGroup {
     endpoints: Vec<Endpoint>,
 }
 
-fn group_endpoints(endpoints: Vec<Endpoint>) -> syn::Result<Vec<RouteGroup>> {
-    let mut shapes = BTreeMap::<String, String>::new();
-    let mut groups = BTreeMap::<String, Vec<Endpoint>>::new();
-    for endpoint in endpoints {
-        if let Some(existing) = shapes.insert(endpoint.shape.clone(), endpoint.path.clone())
-            && existing != endpoint.path
-        {
-            return Err(syn::Error::new(
-                proc_macro2::Span::call_site(),
-                format!(
-                    "ambiguous route templates {existing} and {}; rename captures consistently",
-                    endpoint.path
-                ),
-            ));
-        }
-        groups
-            .entry(endpoint.path.clone())
-            .or_default()
-            .push(endpoint);
-    }
-    let mut result = Vec::with_capacity(groups.len());
-    for (path, mut endpoints) in groups {
-        endpoints.sort_by_key(|endpoint| endpoint.method);
-        for pair in endpoints.windows(2) {
-            if pair[0].method == pair[1].method {
-                return Err(syn::Error::new(
-                    proc_macro2::Span::call_site(),
-                    format!("duplicate {} route {path}", pair[0].method),
-                ));
-            }
-        }
-        let specificity = path
-            .split('/')
-            .filter(|segment| !segment.starts_with(':') && !segment.starts_with('*'))
-            .count();
-        result.push(RouteGroup {
-            path,
-            specificity,
-            endpoints,
-        });
-    }
-    result.sort_by(|left, right| {
-        left.path
-            .contains("/*")
-            .cmp(&right.path.contains("/*"))
-            .then_with(|| {
-                right
-                    .specificity
-                    .cmp(&left.specificity)
-                    .then_with(|| left.path.cmp(&right.path))
-            })
-    });
-    Ok(result)
-}
-
 fn result_kind(output: &ReturnType) -> syn::Result<ResultKind> {
     let ReturnType::Type(_, ty) = output else {
         return Err(syn::Error::new_spanned(
             output,
-            "HTTP API methods must return a JSON-serializable value or ApiResult<T>",
+            "HTTP API functions must return a JSON-serializable value or ApiResult<T>",
         ));
     };
     let Type::Path(path) = ty.as_ref() else {
@@ -901,23 +743,6 @@ fn parse_captures(path: &str, span: impl quote::ToTokens) -> syn::Result<Vec<Str
     Ok(captures)
 }
 
-fn validate_prefix(prefix: &str, span: proc_macro2::Span) -> syn::Result<()> {
-    if prefix.is_empty() || prefix == "/" {
-        return Ok(());
-    }
-    if !prefix.starts_with('/') || prefix.ends_with('/') {
-        return Err(syn::Error::new(
-            span,
-            "api prefix must be empty or start with / and have no trailing /",
-        ));
-    }
-    Ok(())
-}
-
-fn normalize_prefix(prefix: String) -> String {
-    if prefix == "/" { String::new() } else { prefix }
-}
-
 fn validate_endpoint_path(path: &str, span: impl quote::ToTokens) -> syn::Result<()> {
     if !path.starts_with('/') {
         return Err(syn::Error::new_spanned(
@@ -932,31 +757,6 @@ fn validate_endpoint_path(path: &str, span: impl quote::ToTokens) -> syn::Result
         ));
     }
     Ok(())
-}
-
-fn join_path(prefix: &str, path: &str) -> String {
-    if prefix.is_empty() {
-        path.to_owned()
-    } else if path == "/" {
-        prefix.to_owned()
-    } else {
-        format!("{prefix}{path}")
-    }
-}
-
-fn route_shape(path: &str) -> String {
-    path.split('/')
-        .map(|segment| {
-            if segment.starts_with('*') {
-                "*"
-            } else if segment.starts_with(':') {
-                ":"
-            } else {
-                segment
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("/")
 }
 
 pub(crate) fn server_crate_path() -> TokenStream2 {
@@ -1028,63 +828,4 @@ fn method_bit(method: &str) -> u16 {
         .iter()
         .position(|known| *known == method)
         .map_or(0, |index| 1 << index)
-}
-
-#[cfg(test)]
-mod registration_tests {
-    use super::ApiArguments;
-    use quote::ToTokens;
-
-    fn group(arguments: &str) -> syn::Result<Option<String>> {
-        Ok(syn::parse_str::<ApiArguments>(arguments)?
-            .registry
-            .map(|path| path.to_token_stream().to_string()))
-    }
-
-    #[test]
-    fn defaults_to_registration_and_allows_explicit_opt_out() {
-        for arguments in ["", "prefix = \"/fixture\"", "register", "register = true"] {
-            assert_eq!(
-                group(arguments).unwrap().as_deref(),
-                Some("crate :: http_apis")
-            );
-        }
-        for arguments in [
-            "register = false",
-            "prefix = \"/fixture\", register = false,",
-        ] {
-            assert!(group(arguments).unwrap().is_none());
-        }
-    }
-
-    #[test]
-    fn named_groups_can_explicitly_enable_registration_in_either_order() {
-        for arguments in [
-            "group = admin",
-            "register = true, group = admin",
-            "group = admin, register = true",
-            "register, group = admin",
-            "registry = crate::admin",
-        ] {
-            assert_eq!(group(arguments).unwrap().as_deref(), Some("crate :: admin"));
-        }
-    }
-
-    #[test]
-    fn rejects_disabled_named_groups_and_repeated_or_non_boolean_flags() {
-        for arguments in [
-            "register = false, group = admin",
-            "group = admin, register = false",
-            "register = false, registry = crate::admin",
-            "register, register = false",
-            "register = false, register = true",
-            "group = admin, registry = crate::admin",
-            "register = \"false\"",
-        ] {
-            assert!(
-                group(arguments).is_err(),
-                "accepted contradictory arguments: {arguments}"
-            );
-        }
-    }
 }

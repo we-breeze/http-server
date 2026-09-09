@@ -1,13 +1,12 @@
 #![cfg(feature = "macros")]
 
+use brz_http_server::{
+    AuthFailure, AuthRequest, Authenticated, Authenticator, Handler, Server, Text,
+};
 use std::net::SocketAddr;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
-};
-
-use brz_http_server::{
-    AuthFailure, AuthRequest, Authenticated, Authenticator, FromState, Handler, Server, Text, api,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -16,184 +15,89 @@ use tokio::{
 
 struct AppState {
     label: &'static str,
-    constructions: Arc<AtomicUsize>,
 }
 
-brz_http_server::registry!(state = Arc<AppState>);
-brz_http_server::registry!(name = empty_apis, state = Arc<AppState>);
-brz_http_server::registry!(group = alternate_apis, state = &'static str);
-brz_http_server::registry!(group = authenticated_apis, state = &'static str, auth = TokenAuth);
-brz_http_server::registry!(name = duplicate_apis, state = ());
-brz_http_server::registry!(name = split_method_apis, state = ());
-brz_http_server::registry!(name = crossing_apis, state = ());
-brz_http_server::registry!(name = precedence_apis, state = ());
+brz_http_server::registry!(dependencies(state: Arc<AppState>));
+brz_http_server::registry!(group = empty_apis, dependencies(state: Arc<AppState>));
+brz_http_server::registry!(group = alternate_apis, dependencies(label: &'static str));
+brz_http_server::registry!(group = authenticated_apis, dependencies(label: &'static str), auth = TokenAuth);
+brz_http_server::registry!(group = duplicate_apis);
+brz_http_server::registry!(group = split_method_apis);
+brz_http_server::registry!(group = crossing_apis);
+brz_http_server::registry!(group = precedence_apis);
+brz_http_server::registry!(group = manual_apis);
 
-// Registration is local to each API module. The entry point never lists the
-// types, and each API can construct a different representation of shared state.
 mod parcels {
-    use super::{AppState, Arc, FromState, Ordering, Text, api};
-
-    pub(super) struct ParcelApi(Arc<AppState>);
-
-    impl FromState<Arc<AppState>> for ParcelApi {
-        fn from_state(state: &Arc<AppState>) -> Self {
-            state.constructions.fetch_add(1, Ordering::Relaxed);
-            Self(Arc::clone(state))
-        }
-    }
-
-    #[api]
-    impl ParcelApi {
-        #[brz_http_server::get("/fixture/parcels/:parcel")]
-        async fn read(&self, parcel: &str) -> Text {
-            tokio::task::yield_now().await;
-            Text(format!("{}:parcel:{parcel}", self.0.label))
-        }
+    use super::{AppState, Text};
+    #[brz_http_server::get("/fixture/parcels/:parcel")]
+    async fn read(#[inject(state)] state: &AppState, parcel: &str) -> Text {
+        tokio::task::yield_now().await;
+        Text(format!("{}:parcel:{parcel}", state.label))
     }
 }
-
 mod lanterns {
-    use super::{AppState, Arc, FromState, Ordering, Text, api};
-
-    struct LanternState {
-        label: String,
-    }
-
-    pub(super) struct LanternApi(LanternState);
-
-    impl FromState<Arc<AppState>> for LanternApi {
-        fn from_state(state: &Arc<AppState>) -> Self {
-            state.constructions.fetch_add(1, Ordering::Relaxed);
-            Self(LanternState {
-                label: state.label.to_owned(),
-            })
-        }
-    }
-
-    #[api(prefix = "/fixture")]
-    impl LanternApi {
-        #[brz_http_server::get("/lanterns/:lantern")]
-        async fn read(&self, lantern: u64) -> Text {
-            Text(format!("{}:lantern:{lantern}", self.0.label))
-        }
+    use super::{AppState, Text};
+    #[brz_http_server::get("/fixture/lanterns/:lantern")]
+    async fn read(lantern: u64, #[inject(state)] application: &AppState) -> Text {
+        Text(format!("{}:lantern:{lantern}", application.label))
     }
 }
 
-struct ManualOnly;
-
-#[api(register = false)]
-impl ManualOnly {
-    #[brz_http_server::get("/fixture/manual")]
-    async fn read(&self) -> Text {
-        Text("manual".into())
-    }
+#[brz_http_server::get("/fixture/manual", group = manual_apis)]
+async fn manual() -> Text {
+    Text("manual".into())
 }
 
-// Disabled declarations must not register constructors or require a state
-// conversion (or even resolve the absent type).
+// Disabled functions must not register routes or resolve missing types/dependencies.
 #[cfg(any())]
-#[api]
-impl UnavailableApi {
-    #[brz_http_server::get("/fixture/disabled")]
-    async fn read(&self) -> MissingResponse {
-        unreachable!()
-    }
+#[brz_http_server::get("/fixture/disabled")]
+async fn disabled(#[inject(missing)] missing: &MissingType) -> MissingResponse {
+    unreachable!()
 }
 
-#[api]
+#[brz_http_server::get("/fixture/disabled-after")]
 #[cfg(any())]
-impl UnavailableAfterApi {
-    #[brz_http_server::get("/fixture/disabled-after")]
-    async fn read(&self) -> MissingResponse {
-        unreachable!()
-    }
+async fn disabled_after(#[inject(missing)] missing: &MissingType) -> MissingResponse {
+    unreachable!()
 }
 
-#[api]
+#[brz_http_server::get("/fixture/disabled-conditional")]
 #[cfg_attr(all(), cfg(any()))]
-impl UnavailableConditionalApi {
-    #[brz_http_server::get("/fixture/disabled-conditional")]
-    async fn read(&self) -> MissingResponse {
-        unreachable!()
-    }
+async fn disabled_conditional(#[inject(missing)] missing: &MissingType) -> MissingResponse {
+    unreachable!()
 }
 
 mod northern {
-    use super::{FromState, Text, api};
-
+    use super::Text;
     pub(super) type State = &'static str;
     type Auth = brz_http_server::NoAuthenticator;
-
-    brz_http_server::registry!(state = State, auth = Auth);
-
-    #[derive(FromState)]
-    struct Api<const N: usize> {
-        state: State,
-    }
-
-    // A concrete specialization can register without a generic factory.
-    #[api(group = crate::northern::http_apis)]
-    impl Api<7> {
-        #[brz_http_server::get("/fixture/nested")]
-        async fn read(&self) -> Text {
-            Text(format!("north:7:{}", self.state))
-        }
+    brz_http_server::registry!(dependencies(state: State), auth = Auth);
+    #[brz_http_server::get("/fixture/nested", group = crate::northern::http_apis)]
+    async fn read(#[inject(state)] state: &str) -> Text {
+        Text(format!("north:7:{state}"))
     }
 }
-
 mod southern {
-    use super::{FromState, Text, api};
-
+    use super::Text;
     pub(super) type State = u64;
-
-    // This identically named collection has an incompatible state type and
-    // the same route, making accidental cross-registration observable.
-    brz_http_server::registry!(state = State);
-
-    struct Api(State);
-
-    impl FromState<State> for Api {
-        fn from_state(state: &State) -> Self {
-            Self(*state)
-        }
-    }
-
-    #[api(group = crate::southern::http_apis)]
-    impl Api {
-        #[brz_http_server::get("/fixture/nested")]
-        async fn read(&self) -> Text {
-            Text(format!("south:{}", self.0))
-        }
+    brz_http_server::registry!(dependencies(state: State));
+    #[brz_http_server::get("/fixture/nested", group = crate::southern::http_apis)]
+    async fn read(#[inject(state)] state: State) -> Text {
+        Text(format!("south:{state}"))
     }
 }
-
 mod alternates {
-    use super::{FromState, Text, api};
-
-    struct AlternateApi(&'static str);
-
-    impl FromState<&'static str> for AlternateApi {
-        fn from_state(state: &&'static str) -> Self {
-            Self(state)
-        }
-    }
-
-    #[api(prefix = "/fixture", group = alternate_apis)]
-    impl AlternateApi {
-        #[brz_http_server::get("/alternate")]
-        async fn read(&self) -> Text {
-            Text(self.0.into())
-        }
+    use super::Text;
+    #[brz_http_server::get("/fixture/alternate", group = alternate_apis)]
+    async fn read(#[inject(label)] label: &str) -> Text {
+        Text(label.into())
     }
 }
 
 struct TokenAuth;
 struct Principal(&'static str);
-
 impl Authenticator for TokenAuth {
     type Principal = Principal;
-
-    // Keep fixtures on the same async trait API as real handlers.
     #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn authenticate(&self, request: AuthRequest<'_>) -> Result<Principal, AuthFailure> {
         match request.header("authorization") {
@@ -204,48 +108,21 @@ impl Authenticator for TokenAuth {
     }
 }
 
-struct ProtectedApi(&'static str);
-
-impl FromState<&'static str> for ProtectedApi {
-    fn from_state(state: &&'static str) -> Self {
-        Self(state)
-    }
-}
-
-#[api(
-    prefix = "/fixture",
-    group = authenticated_apis,
-    auth = required
-)]
-impl ProtectedApi {
-    #[brz_http_server::get("/vault/:slot")]
-    async fn read(&self, slot: u32, actor: Authenticated<Principal>) -> Text {
-        Text(format!("{}:{}:{slot}", self.0, actor.principal().0))
-    }
+#[brz_http_server::get("/fixture/vault/:slot", group = authenticated_apis, auth = required)]
+async fn vault(slot: u32, #[inject(label)] label: &str, actor: Authenticated<Principal>) -> Text {
+    Text(format!("{label}:{}:{slot}", actor.principal().0))
 }
 
 macro_rules! stateless_api {
     ($name:ident, $registry:path, $method:ident, $path:literal, $parameter:ident, $body:literal) => {
-        struct $name;
-
-        impl FromState<()> for $name {
-            fn from_state((): &()) -> Self {
-                Self
-            }
-        }
-
-        #[api(registry = $registry)]
-        impl $name {
-            #[brz_http_server::$method($path)]
-            async fn read(&self, $parameter: &str) -> Text {
-                Text(format!(concat!($body, ":{}"), $parameter))
-            }
+        #[brz_http_server::$method($path, group = $registry)]
+        async fn $name($parameter: &str) -> Text {
+            Text(format!(concat!($body, ":{}"), $parameter))
         }
     };
 }
-
 stateless_api!(
-    DuplicateOne,
+    duplicate_one,
     crate::duplicate_apis,
     get,
     "/echo/:id",
@@ -253,7 +130,7 @@ stateless_api!(
     "one"
 );
 stateless_api!(
-    DuplicateTwo,
+    duplicate_two,
     crate::duplicate_apis,
     get,
     "/echo/:other",
@@ -261,7 +138,7 @@ stateless_api!(
     "two"
 );
 stateless_api!(
-    SplitGet,
+    split_get,
     crate::split_method_apis,
     get,
     "/split/:id",
@@ -269,7 +146,7 @@ stateless_api!(
     "get"
 );
 stateless_api!(
-    SplitPost,
+    split_post,
     crate::split_method_apis,
     post,
     "/split/:other",
@@ -277,7 +154,7 @@ stateless_api!(
     "post"
 );
 stateless_api!(
-    CrossOne,
+    cross_one,
     crate::crossing_apis,
     get,
     "/cross/:id/fixed",
@@ -285,7 +162,7 @@ stateless_api!(
     "one"
 );
 stateless_api!(
-    CrossTwo,
+    cross_two,
     crate::crossing_apis,
     get,
     "/cross/fixed/:other",
@@ -293,28 +170,16 @@ stateless_api!(
     "two"
 );
 stateless_api!(
-    ChoiceParameter,
+    choice_parameter,
     crate::precedence_apis,
     get,
     "/choice/:value",
     value,
     "parameter"
 );
-
-struct ChoiceStatic;
-
-impl FromState<()> for ChoiceStatic {
-    fn from_state((): &()) -> Self {
-        Self
-    }
-}
-
-#[api(registry = crate::precedence_apis)]
-impl ChoiceStatic {
-    #[brz_http_server::get("/choice/fixed")]
-    async fn read(&self) -> Text {
-        Text("static".into())
-    }
+#[brz_http_server::get("/choice/fixed", group = precedence_apis)]
+async fn choice_static() -> Text {
+    Text("static".into())
 }
 
 async fn request(
@@ -349,22 +214,20 @@ fn assert_response(response: &str, status: u16, body: &str) {
 }
 
 #[tokio::test]
-async fn discovers_sibling_modules_and_constructs_once_from_one_state_expression() {
-    let manual: brz_http_server::Router = brz_http_server::Router::new(ManualOnly);
+async fn discovers_sibling_modules_and_evaluates_dependency_expression_once() {
+    let manual: brz_http_server::Router =
+        brz_http_server::handlers!(; group = manual_apis).unwrap();
     assert!(manual.route_priority("/fixture/manual", "GET").is_some());
-    let constructions = Arc::new(AtomicUsize::new(0));
     let evaluations = AtomicUsize::new(0);
-    let state = Arc::new(AppState {
-        label: "first",
-        constructions: Arc::clone(&constructions),
-    });
-    let router = brz_http_server::handlers!({
-        evaluations.fetch_add(1, Ordering::Relaxed);
-        Arc::clone(&state)
-    })
+    let state = Arc::new(AppState { label: "first" });
+    let router = brz_http_server::handlers!(
+        state = {
+            evaluations.fetch_add(1, Ordering::Relaxed);
+            Arc::clone(&state)
+        }
+    )
     .unwrap();
     assert_eq!(evaluations.load(Ordering::Relaxed), 1);
-    assert_eq!(constructions.load(Ordering::Relaxed), 2);
     let server = Server::bind("127.0.0.1:0".parse().unwrap(), router)
         .await
         .unwrap();
@@ -396,38 +259,30 @@ async fn discovers_sibling_modules_and_constructs_once_from_one_state_expression
         let response = request(address, "GET", path, None).await;
         assert!(response.starts_with("HTTP/1.1 404 "), "{response}");
     }
-    assert_eq!(constructions.load(Ordering::Relaxed), 2);
     tx.send(()).unwrap();
     task.await.unwrap().unwrap();
 }
 
 #[tokio::test]
 async fn collections_keep_each_construction_state_and_listener_separate() {
-    let constructions = Arc::new(AtomicUsize::new(0));
-    let first = Arc::new(AppState {
-        label: "first",
-        constructions: Arc::clone(&constructions),
-    });
-    let second = Arc::new(AppState {
-        label: "second",
-        constructions: Arc::clone(&constructions),
-    });
+    let first = Arc::new(AppState { label: "first" });
+    let second = Arc::new(AppState { label: "second" });
     let servers = [
         Server::bind(
             "127.0.0.1:0".parse().unwrap(),
-            brz_http_server::handlers!(first).unwrap(),
+            brz_http_server::handlers!(state = first).unwrap(),
         )
         .await
         .unwrap(),
         Server::bind(
             "127.0.0.1:0".parse().unwrap(),
-            brz_http_server::handlers!(second).unwrap(),
+            brz_http_server::handlers!(state = second).unwrap(),
         )
         .await
         .unwrap(),
         Server::bind(
             "127.0.0.1:0".parse().unwrap(),
-            brz_http_server::handlers!("alternate", alternate_apis).unwrap(),
+            brz_http_server::handlers!(label = "alternate"; group = alternate_apis).unwrap(),
         )
         .await
         .unwrap(),
@@ -455,7 +310,6 @@ async fn collections_keep_each_construction_state_and_listener_separate() {
     );
     let missing = request(running[2].0, "GET", "/fixture/parcels/blue", None).await;
     assert!(missing.starts_with("HTTP/1.1 404 "), "{missing}");
-    assert_eq!(constructions.load(Ordering::Relaxed), 4);
     for (_, tx, task) in running {
         tx.send(()).unwrap();
         task.await.unwrap().unwrap();
@@ -464,7 +318,7 @@ async fn collections_keep_each_construction_state_and_listener_separate() {
 
 #[tokio::test]
 async fn registered_handler_keeps_concrete_authenticator_and_rejects_bad_credentials() {
-    let router = brz_http_server::handlers!("vault", authenticated_apis).unwrap();
+    let router = brz_http_server::handlers!(label = "vault"; group = authenticated_apis).unwrap();
     let server = Server::bind_with_authenticator("127.0.0.1:0".parse().unwrap(), router, TokenAuth)
         .await
         .unwrap();
@@ -499,24 +353,19 @@ async fn registered_handler_keeps_concrete_authenticator_and_rejects_bad_credent
 
 #[test]
 fn empty_collection_does_not_construct_unrelated_apis() {
-    let constructions = Arc::new(AtomicUsize::new(0));
-    let state = Arc::new(AppState {
-        label: "empty",
-        constructions: Arc::clone(&constructions),
-    });
-    let router = brz_http_server::handlers!(state, registry = crate::empty_apis).unwrap();
+    let state = Arc::new(AppState { label: "empty" });
+    let router = brz_http_server::handlers!(state; group = empty_apis).unwrap();
     assert!(
         router
             .route_priority("/fixture/parcels/blue", "GET")
             .is_none()
     );
     assert_eq!(router.route_methods("/fixture/parcels/blue"), 0);
-    assert_eq!(constructions.load(Ordering::Relaxed), 0);
 }
 
 #[test]
 fn equivalent_parameter_patterns_are_rejected_with_both_routes() {
-    let result = brz_http_server::handlers!((), registry = crate::duplicate_apis);
+    let result = brz_http_server::handlers!(; group = crate::duplicate_apis);
     let Err(error) = result else {
         panic!("ambiguous routes must be rejected before serving");
     };
@@ -527,7 +376,7 @@ fn equivalent_parameter_patterns_are_rejected_with_both_routes() {
 
 #[test]
 fn intersecting_patterns_with_equal_specificity_are_rejected() {
-    let result = brz_http_server::handlers!((), registry = crate::crossing_apis);
+    let result = brz_http_server::handlers!(; group = crate::crossing_apis);
     assert!(
         result.is_err(),
         "both routes accept /cross/fixed/fixed with equal priority"
@@ -536,7 +385,7 @@ fn intersecting_patterns_with_equal_specificity_are_rejected() {
 
 #[tokio::test]
 async fn disjoint_methods_share_a_path_and_keep_method_errors() {
-    let router = brz_http_server::handlers!((), registry = crate::split_method_apis).unwrap();
+    let router = brz_http_server::handlers!(; group = crate::split_method_apis).unwrap();
     let server = Server::bind("127.0.0.1:0".parse().unwrap(), router)
         .await
         .unwrap();
@@ -561,7 +410,7 @@ async fn disjoint_methods_share_a_path_and_keep_method_errors() {
 
 #[tokio::test]
 async fn overlapping_routes_with_different_specificity_keep_static_precedence() {
-    let router = brz_http_server::handlers!((), registry = crate::precedence_apis).unwrap();
+    let router = brz_http_server::handlers!(; group = crate::precedence_apis).unwrap();
     let server = Server::bind("127.0.0.1:0".parse().unwrap(), router)
         .await
         .unwrap();
@@ -581,16 +430,16 @@ async fn overlapping_routes_with_different_specificity_keep_static_precedence() 
 }
 
 #[tokio::test]
-async fn nested_same_name_collections_resolve_aliases_and_concrete_generic_apis() {
+async fn nested_same_name_collections_resolve_dependency_type_aliases() {
     let north: northern::State = "blue";
     let south: southern::State = 42;
     let routers = [
         (
-            brz_http_server::handlers!(north, crate::northern::http_apis).unwrap(),
+            brz_http_server::handlers!(state = north; group = crate::northern::http_apis).unwrap(),
             "north:7:blue",
         ),
         (
-            brz_http_server::handlers!(south, crate::southern::http_apis).unwrap(),
+            brz_http_server::handlers!(state = south; group = crate::southern::http_apis).unwrap(),
             "south:42",
         ),
     ];

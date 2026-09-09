@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use brz_http_server::{
     ApiError, ApiResult, AuthFailure, AuthRequest, Authenticated, Authenticator,
-    EphemeralBytesArena, Handler, Server, ServerConfig, StatusCode, api,
+    EphemeralBytesArena, Handler, Server, ServerConfig, StatusCode,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -25,9 +25,8 @@ struct UserView<'a> {
     trace_id: Option<&'a str>,
 }
 
-struct UserApi {
-    calls: Arc<AtomicUsize>,
-}
+brz_http_server::registry!(dependencies(calls: Arc<AtomicUsize>));
+brz_http_server::registry!(group = protected, auth = HeaderAuthenticator);
 
 #[derive(Debug)]
 struct Actor {
@@ -66,71 +65,67 @@ struct HealthView {
     ok: bool,
 }
 
-struct ProtectedApi;
-
-#[api(prefix = "/private", auth = required, register = false)]
-impl ProtectedApi {
-    #[brz_http_server::get("/:id")]
-    async fn get(&self, id: u64, auth: Authenticated<Actor>) -> PrivateView {
-        std::future::ready(()).await;
-        PrivateView {
-            id,
-            actor_id: auth.principal().id,
-        }
-    }
-
-    #[brz_http_server::get("/optional", auth = optional)]
-    async fn optional(&self, auth: Option<Authenticated<Actor>>) -> OptionalAuthView {
-        std::future::ready(()).await;
-        OptionalAuthView {
-            authenticated: auth.is_some(),
-        }
-    }
-
-    #[brz_http_server::get("/health", auth = none)]
-    async fn health(&self) -> HealthView {
-        std::future::ready(()).await;
-        HealthView { ok: true }
+#[brz_http_server::get("/private/:id", group = protected, auth = required)]
+async fn get_private(id: u64, auth: Authenticated<Actor>) -> PrivateView {
+    std::future::ready(()).await;
+    PrivateView {
+        id,
+        actor_id: auth.principal().id,
     }
 }
 
-#[api(prefix = "/v1/users", register = false)]
-impl UserApi {
-    #[brz_http_server::get("/:id")]
-    async fn get(&self, id: u64, verbose: Option<bool>) -> UserView<'static> {
-        std::future::ready(()).await;
-        self.calls.fetch_add(1, Ordering::Relaxed);
-        UserView {
-            id,
-            name: "read",
-            verbose: verbose.unwrap_or(false),
-            trace_id: None,
-        }
+#[brz_http_server::get("/private/optional", auth = optional, group = protected)]
+async fn optional(auth: Option<Authenticated<Actor>>) -> OptionalAuthView {
+    std::future::ready(()).await;
+    OptionalAuthView {
+        authenticated: auth.is_some(),
     }
+}
 
-    #[brz_http_server::post("/:id", headers(trace_id = "x-trace-id"))]
-    async fn update<'a>(
-        &self,
-        id: u64,
-        verbose: Option<bool>,
-        input: UpdateUser<'a>,
-        trace_id: Option<&'a str>,
-    ) -> ApiResult<UserView<'a>> {
-        tokio::task::yield_now().await;
-        self.calls.fetch_add(1, Ordering::Relaxed);
-        if input.name.is_empty() {
-            return Err(ApiError::bad_request("name is required"));
-        }
-        if input.name == "forbidden" {
-            return Err(ApiError::forbidden("not permitted"));
-        }
-        Ok(UserView {
-            id,
-            name: input.name,
-            verbose: verbose.unwrap_or(false),
-            trace_id,
-        })
+#[brz_http_server::get("/private/health", auth = none, group = protected)]
+async fn health() -> HealthView {
+    std::future::ready(()).await;
+    HealthView { ok: true }
+}
+
+#[brz_http_server::get("/v1/users/:id")]
+async fn get(
+    #[inject(calls)] calls: &AtomicUsize,
+    id: u64,
+    verbose: Option<bool>,
+) -> UserView<'static> {
+    std::future::ready(()).await;
+    calls.fetch_add(1, Ordering::Relaxed);
+    UserView {
+        id,
+        name: "read",
+        verbose: verbose.unwrap_or(false),
+        trace_id: None,
     }
+}
+
+#[brz_http_server::post("/v1/users/:id", headers(trace_id = "x-trace-id"))]
+async fn update<'a>(
+    #[inject(calls)] calls: &AtomicUsize,
+    id: u64,
+    verbose: Option<bool>,
+    input: UpdateUser<'a>,
+    trace_id: Option<&'a str>,
+) -> ApiResult<UserView<'a>> {
+    tokio::task::yield_now().await;
+    calls.fetch_add(1, Ordering::Relaxed);
+    if input.name.is_empty() {
+        return Err(ApiError::bad_request("name is required"));
+    }
+    if input.name == "forbidden" {
+        return Err(ApiError::forbidden("not permitted"));
+    }
+    Ok(UserView {
+        id,
+        name: input.name,
+        verbose: verbose.unwrap_or(false),
+        trace_id,
+    })
 }
 
 fn start_server<H, A>(server: Server<H, A>) -> (oneshot::Sender<()>, tokio::task::JoinHandle<()>)
@@ -163,9 +158,7 @@ async fn macro_binds_path_query_json_body_and_declared_headers() {
     let calls = Arc::new(AtomicUsize::new(0));
     let server = Server::bind_with_config(
         "127.0.0.1:0".parse().unwrap(),
-        UserApi {
-            calls: Arc::clone(&calls),
-        },
+        brz_http_server::handlers!(calls = Arc::clone(&calls)).unwrap(),
         ServerConfig::default(),
     )
     .await
@@ -193,9 +186,7 @@ async fn macro_rejects_non_json_body_before_invoking_business_code() {
     let calls = Arc::new(AtomicUsize::new(0));
     let server = Server::bind_with_config(
         "127.0.0.1:0".parse().unwrap(),
-        UserApi {
-            calls: Arc::clone(&calls),
-        },
+        brz_http_server::handlers!(calls = Arc::clone(&calls)).unwrap(),
         ServerConfig::new(EphemeralBytesArena::new(1024)),
     )
     .await
@@ -222,9 +213,7 @@ async fn macro_rejects_non_json_body_before_invoking_business_code() {
 async fn macro_returns_405_with_methods_for_matched_path() {
     let server = Server::bind_with_config(
         "127.0.0.1:0".parse().unwrap(),
-        UserApi {
-            calls: Arc::new(AtomicUsize::new(0)),
-        },
+        brz_http_server::handlers!(calls = Arc::new(AtomicUsize::new(0))).unwrap(),
         ServerConfig::new(EphemeralBytesArena::new(1024)),
     )
     .await
@@ -250,9 +239,7 @@ async fn macro_returns_405_with_methods_for_matched_path() {
 async fn macro_serializes_a_business_forbidden_error() {
     let server = Server::bind_with_config(
         "127.0.0.1:0".parse().unwrap(),
-        UserApi {
-            calls: Arc::new(AtomicUsize::new(0)),
-        },
+        brz_http_server::handlers!(calls = Arc::new(AtomicUsize::new(0))).unwrap(),
         ServerConfig::new(EphemeralBytesArena::new(1024)),
     )
     .await
@@ -278,7 +265,7 @@ async fn macro_serializes_a_business_forbidden_error() {
 async fn custom_authenticator_injects_or_rejects_a_typed_principal() {
     let server = Server::bind_with_authenticator_and_config(
         "127.0.0.1:0".parse().unwrap(),
-        brz_http_server::Router::new(ProtectedApi),
+        brz_http_server::handlers!(; group = protected).unwrap(),
         HeaderAuthenticator,
         ServerConfig::new(EphemeralBytesArena::new(1024)),
     )
@@ -357,9 +344,9 @@ async fn segmented_json_borrows_escaped_fields_across_await_and_pipelining() {
     config.max_request_head_bytes = 256;
     let server = Server::bind_with_config(
         "127.0.0.1:0".parse().unwrap(),
-        brz_http_server::Router::new(UserApi {
-            calls: Arc::clone(&calls),
-        }),
+        brz_http_server::Router::new(
+            brz_http_server::handlers!(calls = Arc::clone(&calls)).unwrap(),
+        ),
         config,
     )
     .await
@@ -408,9 +395,9 @@ async fn invalid_segmented_json_is_rejected_without_losing_the_next_request() {
     let calls = Arc::new(AtomicUsize::new(0));
     let server = Server::bind_with_config(
         "127.0.0.1:0".parse().unwrap(),
-        brz_http_server::Router::new(UserApi {
-            calls: Arc::clone(&calls),
-        }),
+        brz_http_server::Router::new(
+            brz_http_server::handlers!(calls = Arc::clone(&calls)).unwrap(),
+        ),
         ServerConfig::new(EphemeralBytesArena::new(3)),
     )
     .await

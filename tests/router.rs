@@ -9,63 +9,67 @@ use std::time::Duration;
 
 use brz_http_server::__private::{PreparedRoute, RouteDescriptor, RouteMatch};
 use brz_http_server::{
-    AuthFailure, AuthRequest, Authenticated, Authenticator, Handler, NoAuthenticator, Request,
-    Response, Router, Server, ServerConfig, Text, api,
+    AuthFailure, AuthRequest, Authenticated, Authenticator, Handler, IntoHttpResponse,
+    NoAuthenticator, Request, Response, Router, Server, ServerConfig, Text,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
 };
 
-struct StaticApi;
-#[api(register = false)]
-impl StaticApi {
-    #[brz_http_server::get("/users/byname")]
-    async fn byname(&self) -> Text {
-        Text("static".into())
-    }
+brz_http_server::registry!(dependencies(calls: Arc<AtomicUsize>));
+brz_http_server::registry!(group = shards, dependencies(number: usize));
+brz_http_server::registry!(group = private, dependencies(value: &'static str), auth = Auth);
+
+#[brz_http_server::get("/users/byname")]
+async fn byname(#[inject(calls)] calls: &AtomicUsize) -> Text {
+    calls.fetch_add(1, Ordering::Relaxed);
+    Text("static".into())
 }
 
-struct ParameterApi;
-#[api(register = false)]
-impl ParameterApi {
-    #[brz_http_server::get("/users/:id")]
-    async fn read(&self, id: &str) -> Text {
-        tokio::task::yield_now().await;
-        Text(format!("read:{id}"))
-    }
-    #[brz_http_server::post("/users/:id")]
-    async fn write(&self, id: &str) -> Text {
-        Text(format!("write:{id}"))
-    }
+#[brz_http_server::get("/users/:id")]
+async fn read(#[inject(calls)] calls: &AtomicUsize, id: &str) -> Text {
+    calls.fetch_add(1, Ordering::Relaxed);
+    tokio::task::yield_now().await;
+    Text(format!("read:{id}"))
 }
 
-struct WildcardApi;
-#[api(register = false)]
-impl WildcardApi {
-    #[brz_http_server::put("/users/*rest")]
-    async fn rest(&self, rest: &str) -> Text {
-        Text(format!("rest:{rest}"))
-    }
+#[brz_http_server::post("/users/:id")]
+async fn write(#[inject(calls)] calls: &AtomicUsize, id: &str) -> Text {
+    calls.fetch_add(1, Ordering::Relaxed);
+    Text(format!("write:{id}"))
 }
 
-struct Shard<const N: usize>;
-#[api(register = false)]
-impl<const N: usize> Shard<N> {
-    #[brz_http_server::get("/shard")]
-    async fn read(&self) -> usize {
-        N
-    }
+#[brz_http_server::put("/users/*rest")]
+async fn rest(#[inject(calls)] calls: &AtomicUsize, rest: &str) -> Text {
+    calls.fetch_add(1, Ordering::Relaxed);
+    Text(format!("rest:{rest}"))
 }
 
-/// Indexed dispatch must never re-enter the old matching methods.
-struct IndexedOnly<H>(H, Arc<AtomicUsize>);
-impl<A: Authenticator, H: Handler<A>> Handler<A> for IndexedOnly<H> {
+#[brz_http_server::get("/shard", group = shards)]
+async fn shard(#[inject(number)] number: usize) -> usize {
+    number
+}
+
+// A descriptor-backed handler must be invoked with the prepared captures;
+// calling any fallback matching hook would repeat the route search.
+struct IndexedOnly(Arc<AtomicUsize>);
+impl Handler for IndexedOnly {
     fn routes(&self) -> &'static [RouteDescriptor] {
-        self.0.routes()
-    }
-    fn register_metrics(&self) {
-        self.0.register_metrics();
+        const ROUTES: &[RouteDescriptor] = &[RouteDescriptor {
+            path: "/indexed/:id",
+            methods: 2,
+            priority: 1 << 24,
+            metrics: || {
+                brz_http_server::ApiMetrics::new([
+                    "/indexed/:id_2xx",
+                    "/indexed/:id_3xx",
+                    "/indexed/:id_4xx",
+                    "/indexed/:id_5xx",
+                ])
+            },
+        }];
+        ROUTES
     }
     fn route_priority(&self, _: &str, _: &str) -> Option<usize> {
         panic!("repeated route search")
@@ -76,20 +80,22 @@ impl<A: Authenticator, H: Handler<A>> Handler<A> for IndexedOnly<H> {
     fn route_methods(&self, _: &str) -> u16 {
         panic!("repeated method search")
     }
-    // Keep fixtures on the same async trait API as real handlers.
     #[allow(unknown_lints, clippy::unused_async_trait_impl)]
-    async fn call(&self, _: Request<'_>, _: &A) -> Response {
+    async fn call(&self, _: Request<'_>, _: &NoAuthenticator) -> Response {
         panic!("unselected dispatch")
     }
-    fn call_route<'a>(
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
+    async fn call_route<'a>(
         &'a self,
         request: Request<'a>,
-        auth: &'a A,
+        _: &'a NoAuthenticator,
         route: usize,
         captures: RouteMatch<'a>,
-    ) -> impl Future<Output = Response> + Send + 'a {
-        self.1.fetch_add(1, Ordering::Relaxed);
-        self.0.call_route(request, auth, route, captures)
+    ) -> Response {
+        assert_eq!(route, 0);
+        self.0.fetch_add(1, Ordering::Relaxed);
+        Text(format!("indexed:{}", captures.capture(0).unwrap()))
+            .into_http_response(request.response_arena())
     }
 }
 
@@ -137,13 +143,12 @@ async fn send(
 async fn resolves_once_and_dispatches_static_parameters_and_wildcards() {
     let invoked = Arc::new(AtomicUsize::new(0));
     let prepared = Arc::new(AtomicUsize::new(0));
-    let router = Router::new(IndexedOnly(StaticApi, invoked.clone())).merge(
-        Router::new(IndexedOnly(ParameterApi, invoked.clone()))
-            .merge(IndexedOnly(WildcardApi, invoked.clone())),
-    );
+    let router = brz_http_server::handlers!(calls = invoked.clone())
+        .unwrap()
+        .merge(IndexedOnly(invoked.clone()));
     // Resolve once before merging to verify warmed indexes are invalidated.
     assert!(router.route_priority("/shard", "GET").is_none());
-    let router = router.merge(Shard::<7>);
+    let router = router.merge(brz_http_server::handlers!(number = 7; group = shards).unwrap());
     let server = Server::bind_with_config(
         "127.0.0.1:0".parse().unwrap(),
         CountPrepared {
@@ -171,6 +176,7 @@ async fn resolves_once_and_dispatches_static_parameters_and_wildcards() {
         ("PUT", "/users/", "rest:"),
         ("PUT", "/users/a%2Fb", "rest:a/b"),
         ("GET", "/shard", "7"),
+        ("GET", "/indexed/9", "indexed:9"),
     ] {
         let response = send(address, method, path, 0).await;
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");
@@ -192,8 +198,8 @@ async fn resolves_once_and_dispatches_static_parameters_and_wildcards() {
             .await
             .starts_with("HTTP/1.1 408")
     );
-    assert_eq!(prepared.load(Ordering::Relaxed), 11);
-    assert_eq!(invoked.load(Ordering::Relaxed), 7);
+    assert_eq!(prepared.load(Ordering::Relaxed), 12);
+    assert_eq!(invoked.load(Ordering::Relaxed), 8);
     let mut recorded = false;
     brz_metrics::visit(|name, _, snapshot| {
         if name == "/users/:id_4xx" {
@@ -218,23 +224,20 @@ impl Authenticator for Auth {
         Ok(Principal)
     }
 }
-struct PrivateApi {
-    value: &'static str,
+#[brz_http_server::get("/private", group = private, auth = required)]
+async fn private(#[inject(value)] value: &str, actor: Authenticated<Principal>) -> Text {
+    let _ = actor.principal();
+    Text(value.into())
 }
-#[api(auth = required, register = false)]
-impl PrivateApi {
-    #[brz_http_server::get("/private")]
-    async fn private(&self, actor: Authenticated<Principal>) -> Text {
-        let _ = actor.principal();
-        Text(self.value.into())
-    }
+
+#[brz_http_server::get("/users/byname", group = private)]
+async fn public() -> Text {
+    Text("static".into())
 }
 
 #[tokio::test]
-async fn preserves_authenticator_type_and_api_owned_state() {
-    let router = Router::new(StaticApi).merge(PrivateApi {
-        value: "private-state",
-    });
+async fn preserves_authenticator_type_and_named_dependencies() {
+    let router = brz_http_server::handlers!(value = "private-state"; group = private).unwrap();
     let server = Server::bind_with_authenticator("127.0.0.1:0".parse().unwrap(), router, Auth)
         .await
         .unwrap();
@@ -260,11 +263,14 @@ async fn preserves_authenticator_type_and_api_owned_state() {
 #[tokio::test]
 async fn hundreds_of_apis_keep_one_router_type_and_registration_order() {
     // This reassignment could not compile with Router<Self, H>.
-    let mut router = Router::new(Shard::<0>);
+    let mut router = Router::new(brz_http_server::handlers!(number = 0; group = shards).unwrap());
     for _ in 0..512 {
-        router = router.merge(Shard::<1>);
+        router = router.merge(brz_http_server::handlers!(number = 1; group = shards).unwrap());
     }
-    let nested = Router::new(Shard::<2>).merge(Router::new(Shard::<3>));
+    let nested = Router::new(brz_http_server::handlers!(number = 2; group = shards).unwrap())
+        .merge(Router::new(
+            brz_http_server::handlers!(number = 3; group = shards).unwrap(),
+        ));
     let router = router.merge(nested);
     let server = Server::bind("127.0.0.1:0".parse().unwrap(), router)
         .await
