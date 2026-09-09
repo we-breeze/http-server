@@ -1,9 +1,12 @@
 ## Function APIs and named dependencies
 
-Enable the `macros` feature. Define one async free function per route and use
+Enable the `macros` and `metrics` features. Define one async free function per route and use
 ordinary Rust modules to organize related endpoints. Each function declares its
 full path, authentication policy, HTTP inputs, injected dependencies, and output.
 `#[api] impl` and `FromState` are no longer supported.
+
+The `metrics` flag is reserved for future conditional collection. Existing route
+metrics currently remain enabled even when this flag is omitted.
 
 Declare dependency names and types once for each listener group:
 

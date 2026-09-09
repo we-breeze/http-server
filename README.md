@@ -37,7 +37,7 @@ SSE-specific behavior, and WebSockets remain outside this release.
 
 ## API macros
 
-Enable the `macros` feature. Define one async free function per route and use
+Enable the `macros` and `metrics` features. Define one async free function per route and use
 ordinary Rust modules to organize related endpoints. Each function declares its
 full path, authentication policy, HTTP inputs, injected dependencies, and output.
 `#[api] impl` and `FromState` are no longer supported.
@@ -241,6 +241,10 @@ until borrowed response fields have been serialized. Manual handlers can use
 raw body access remains available after parsing, including on rejection paths.
 
 ## API metrics
+
+The `metrics` feature is currently a reserved configuration flag. Existing route
+metrics are collected regardless of this flag; conditional collection will be
+implemented separately.
 
 Exported function routes automatically register four `brz-metrics` entries when
 binding the server. Profile output uses type `API` and names based on the full
