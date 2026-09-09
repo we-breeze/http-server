@@ -39,6 +39,8 @@ tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-threa
 [features]
 default = []
 macros = ["dep:http-server-macros", "dep:inventory"]
+# Reserved flag for metrics configuration; collection is currently always enabled.
+metrics = []
 
 [lints.rust]
 unsafe_code = "forbid"
