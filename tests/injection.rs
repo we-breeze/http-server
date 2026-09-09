@@ -54,13 +54,13 @@ struct View<'a> {
     id: u64,
 }
 
-#[brz_http_server::post("/borrow/:id", headers(trace = "x-trace"))]
+#[brz_http_server::post("/borrow/:id")]
 async fn borrowed<'a>(
     #[inject(state)] application: &'a AppState,
     id: u64,
     #[inject(replica)] _reader: &Store,
     input: Input<'a>,
-    trace: &'a str,
+    #[header("x-trace")] trace: &'a str,
 ) -> ApiResult<View<'a>> {
     tokio::task::yield_now().await;
     Ok(View {

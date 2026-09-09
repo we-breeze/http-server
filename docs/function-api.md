@@ -50,10 +50,14 @@ clones that dependency using the `Clone` trait on each invocation. `&mut T` is n
 supported: shared mutable services should expose their own synchronization.
 There is no automatic matching by parameter name or type and no runtime lookup.
 
-Injected parameters can appear anywhere without occupying a path-capture position.
+Injected and header parameters can appear anywhere without occupying a path-capture position.
 Among the remaining parameters, path captures bind first in route order and must
 have the capture names. Scalars then bind query keys; one business struct binds
-the body. `headers(...)` explicitly selects header parameters.
+the body. `#[header]` reads a header with the parameter's name (without a raw
+identifier's `r#` prefix); `#[header("x-api-key")]` specifies its name explicitly.
+Underscores remain underscores. `Option<T>` permits a missing header; `T` requires
+one. Repeated annotations and conflicting parameter sources are compile errors.
+The route-level `headers(...)` syntax is no longer supported.
 `Authenticated<T>` is supplied by the authentication layer. A parameter cannot
 bind both a dependency and a path capture or header. Functions remain directly
 callable with ordinary Rust arguments, including borrowed inputs and outputs.

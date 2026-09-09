@@ -2,7 +2,8 @@ use super::{RouteArguments, expand_adapter, route_attribute};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{FnArg, Ident, ItemFn, Pat, PatType, Type, parse_macro_input};
+use syn::ext::IdentExt;
+use syn::{FnArg, Ident, ItemFn, LitStr, Pat, PatType, Type, parse_macro_input};
 
 pub(crate) fn expand_function(
     method: &'static str,
@@ -71,7 +72,7 @@ fn expand(
         if let FnArg::Typed(argument) = argument {
             argument
                 .attrs
-                .retain(|attr| !attr.path().is_ident("inject"));
+                .retain(|attr| !attr.path().is_ident("inject") && !attr.path().is_ident("header"));
         }
     }
     let cfg = input
@@ -127,6 +128,42 @@ fn gating_attribute(meta: &syn::Meta) -> syn::Result<Option<syn::Meta>> {
     Ok((!attributes.is_empty()).then(|| syn::parse_quote!(cfg_attr(#condition, #(#attributes),*))))
 }
 
+pub(super) fn header(argument: &PatType, ident: &Ident) -> syn::Result<Option<LitStr>> {
+    let mut name = None;
+    for attr in argument
+        .attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("header"))
+    {
+        if name.is_some() {
+            return Err(syn::Error::new_spanned(
+                attr,
+                "specify exactly one #[header] per parameter",
+            ));
+        }
+        let value = if matches!(attr.meta, syn::Meta::Path(_)) {
+            LitStr::new(&ident.unraw().to_string(), ident.span())
+        } else {
+            attr.parse_args::<LitStr>().map_err(|_| {
+                syn::Error::new_spanned(attr, "expected #[header] or #[header(\"header-name\")]")
+            })?
+        };
+        if value.value().is_empty()
+            || !value
+                .value()
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
+        {
+            return Err(syn::Error::new_spanned(
+                value,
+                "expected a nonempty ASCII HTTP header name",
+            ));
+        }
+        name = Some(value);
+    }
+    Ok(name)
+}
+
 pub(super) fn injection(argument: &PatType) -> syn::Result<Option<Ident>> {
     let mut dependency = None;
     for attr in argument
@@ -162,6 +199,115 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::too_many_lines)]
+    fn rejects_invalid_or_conflicting_header_attributes() {
+        for (route, source, expected) in [
+            (
+                quote!("/"),
+                quote!(
+                    async fn read(
+                        #[header]
+                        #[header("other")]
+                        value: &str,
+                    ) {
+                    }
+                ),
+                "exactly one #[header]",
+            ),
+            (
+                quote!("/"),
+                quote!(
+                    async fn read(#[header()] value: &str) {}
+                ),
+                "expected #[header]",
+            ),
+            (
+                quote!("/"),
+                quote!(
+                    async fn read(#[header(42)] value: &str) {}
+                ),
+                "expected #[header]",
+            ),
+            (
+                quote!("/"),
+                quote!(
+                    async fn read(#[header = "name"] value: &str) {}
+                ),
+                "expected #[header]",
+            ),
+            (
+                quote!("/"),
+                quote!(
+                    async fn read(#[header("a", "b")] value: &str) {}
+                ),
+                "expected #[header]",
+            ),
+            (
+                quote!("/"),
+                quote!(
+                    async fn read(#[header("")] value: &str) {}
+                ),
+                "ASCII HTTP header name",
+            ),
+            (
+                quote!("/"),
+                quote!(
+                    async fn read(#[header("bad name")] value: &str) {}
+                ),
+                "ASCII HTTP header name",
+            ),
+            (
+                quote!("/"),
+                quote!(
+                    async fn read(#[header] 名字: &str) {}
+                ),
+                "ASCII HTTP header name",
+            ),
+            (
+                quote!("/"),
+                quote!(
+                    async fn read(
+                        #[inject(state)]
+                        #[header]
+                        value: &str,
+                    ) {
+                    }
+                ),
+                "cannot also bind",
+            ),
+            (
+                quote!("/:id"),
+                quote!(
+                    async fn read(#[header] id: u32) {}
+                ),
+                "cannot also bind a path capture",
+            ),
+            (
+                quote!("/", auth = required),
+                quote!(
+                    async fn read(#[header] user: Authenticated<User>) {}
+                ),
+                "Authenticated<T> is injected by auth",
+            ),
+            (
+                quote!("/", headers(value = "other")),
+                quote!(
+                    async fn read(#[header] value: &str) {}
+                ),
+                "use parameter attributes",
+            ),
+        ] {
+            let error = expand("GET", &route, syn::parse2(source).unwrap())
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains(expected),
+                "expected {expected}, received {error}"
+            );
+        }
+    }
+
+    #[test]
     fn rejects_ambiguous_or_unsupported_function_declarations() {
         for (route, source, expected) in [
             (
@@ -191,9 +337,14 @@ mod tests {
                 "dependencies are shared",
             ),
             (
-                quote!("/", headers(state = "x-state")),
+                quote!("/"),
                 quote!(
-                    async fn read(#[inject(a)] state: &str) {}
+                    async fn read(
+                        #[inject(a)]
+                        #[header]
+                        state: &str,
+                    ) {
+                    }
                 ),
                 "cannot also bind",
             ),
