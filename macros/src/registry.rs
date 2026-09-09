@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
+use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
 use syn::{Expr, Ident, Path, Token, Type, parse_macro_input};
 
@@ -71,6 +72,7 @@ pub(crate) fn declare(input: TokenStream) -> TokenStream {
     } = parse_macro_input!(input as RegistryArguments);
     let server = server_crate_path();
     let auth = auth.map_or_else(|| quote!(#server::NoAuthenticator), |auth| quote!(#auth));
+    let module = registry_module(&name);
     let state_type = format_ident!("__HttpDependencies_{}", name);
     let auth_alias = format_ident!("__HttpRegistryAuth_{}", name);
     let fields = dependencies.iter().map(|(name, ty)| quote!(pub #name: #ty));
@@ -83,7 +85,7 @@ pub(crate) fn declare(input: TokenStream) -> TokenStream {
         pub(crate) type #auth_alias = #auth;
 
         #[doc(hidden)]
-        pub(crate) mod #name {
+        pub(crate) mod #module {
             pub type Dependencies = super::#state_type;
             pub type State = ::std::sync::Arc<Dependencies>;
             pub type Auth = super::#auth_alias;
@@ -131,7 +133,7 @@ impl Parse for CollectArguments {
                 input.parse::<Token![,]>()?;
             }
         }
-        let mut registry = syn::parse_quote!(crate::http_apis);
+        let mut registry = group_path(syn::parse_quote!(http_apis));
         if input.peek(Token![;]) {
             input.parse::<Token![;]>()?;
             let key: Ident = input.parse()?;
@@ -151,8 +153,15 @@ impl Parse for CollectArguments {
     }
 }
 
+fn registry_module(name: &Ident) -> Ident {
+    format_ident!("__http_registry_{}", name.unraw())
+}
+
+/// Resolve logical group paths to generated modules, preserving the parent path.
 /// Bare group names refer to declarations in the application crate root.
-pub(crate) fn group_path(path: Path) -> Path {
+pub(crate) fn group_path(mut path: Path) -> Path {
+    let group = path.segments.last_mut().expect("a group path is nonempty");
+    group.ident = registry_module(&group.ident);
     if path.leading_colon.is_none() && path.segments.len() == 1 {
         syn::parse_quote!(crate::#path)
     } else {

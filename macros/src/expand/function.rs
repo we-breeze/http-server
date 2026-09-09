@@ -38,7 +38,7 @@ fn expand(
     let registry = route
         .group
         .clone()
-        .unwrap_or_else(|| syn::parse_quote!(crate::http_apis));
+        .unwrap_or_else(|| crate::registry::group_path(syn::parse_quote!(http_apis)));
     let name = &input.sig.ident;
     let adapter = format_ident!("__HttpEndpoint_{}", name);
     let mut call_arguments = Vec::new();
