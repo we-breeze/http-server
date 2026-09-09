@@ -1,5 +1,3 @@
-use std::collections::{BTreeMap, BTreeSet};
-
 use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -58,7 +56,6 @@ struct RouteArguments {
     consumes: Option<Codec>,
     produces: Option<Codec>,
     auth: Option<AuthMode>,
-    headers: BTreeMap<String, LitStr>,
     group: Option<syn::Path>,
 }
 
@@ -68,7 +65,6 @@ impl Parse for RouteArguments {
         let mut consumes = None;
         let mut produces = None;
         let mut auth = None;
-        let mut headers = BTreeMap::new();
         let mut group = None;
         while !input.is_empty() {
             input.parse::<Token![,]>()?;
@@ -77,39 +73,25 @@ impl Parse for RouteArguments {
             }
             let name: Ident = input.parse()?;
             if name == "headers" {
-                let content;
-                syn::parenthesized!(content in input);
-                while !content.is_empty() {
-                    let parameter: Ident = content.parse()?;
-                    content.parse::<Token![=]>()?;
-                    let header: LitStr = content.parse()?;
-                    if headers.insert(parameter.to_string(), header).is_some() {
-                        return Err(syn::Error::new_spanned(
-                            parameter,
-                            "a parameter may only bind one HTTP header",
-                        ));
-                    }
-                    if content.is_empty() {
-                        break;
-                    }
-                    content.parse::<Token![,]>()?;
-                }
+                return Err(syn::Error::new_spanned(
+                    name,
+                    "headers(...) is no longer supported; use parameter attributes #[header] or #[header(\"header-name\")]",
+                ));
+            }
+            input.parse::<Token![=]>()?;
+            if name == "consumes" {
+                consumes = Some(input.parse()?);
+            } else if name == "produces" {
+                produces = Some(input.parse()?);
+            } else if name == "auth" {
+                auth = Some(input.parse()?);
+            } else if name == "group" && group.is_none() {
+                group = Some(crate::registry::group_path(input.parse()?));
             } else {
-                input.parse::<Token![=]>()?;
-                if name == "consumes" {
-                    consumes = Some(input.parse()?);
-                } else if name == "produces" {
-                    produces = Some(input.parse()?);
-                } else if name == "auth" {
-                    auth = Some(input.parse()?);
-                } else if name == "group" && group.is_none() {
-                    group = Some(crate::registry::group_path(input.parse()?));
-                } else {
-                    return Err(syn::Error::new_spanned(
-                        name,
-                        "supported route options are consumes, produces, auth, headers(...), and group (once)",
-                    ));
-                }
+                return Err(syn::Error::new_spanned(
+                    name,
+                    "supported route options are consumes, produces, auth, and group (once)",
+                ));
             }
         }
         Ok(Self {
@@ -117,7 +99,6 @@ impl Parse for RouteArguments {
             consumes,
             produces,
             auth,
-            headers,
             group,
         })
     }
@@ -414,6 +395,28 @@ fn parse_endpoint(
         };
         let mut ty = (*argument.ty).clone();
         syn::visit_mut::VisitMut::visit_type_mut(&mut BindingLifetimes, &mut ty);
+        let dependency = function::injection(argument)?;
+        let header = function::header(argument, &pattern.ident)?;
+        if header.is_some() && dependency.is_some() {
+            return Err(syn::Error::new_spanned(
+                argument,
+                "an injected dependency cannot also bind a header",
+            ));
+        }
+        if header.is_some() && authenticated_inner(&ty).is_some() {
+            return Err(syn::Error::new_spanned(
+                argument,
+                "Authenticated<T> is injected by auth, not #[header]",
+            ));
+        }
+        let source = if let Some(name) = header {
+            ParameterSource::Header {
+                name,
+                optional_inner: option_inner(&ty),
+            }
+        } else {
+            dependency.map_or(ParameterSource::JsonBody, ParameterSource::Injected)
+        };
         parameters.push(Parameter {
             ident: pattern.ident.clone(),
             binding: Ident::new(
@@ -421,13 +424,29 @@ fn parse_endpoint(
                 proc_macro2::Span::mixed_site(),
             ),
             ty,
-            source: function::injection(argument)?
-                .map_or(ParameterSource::JsonBody, ParameterSource::Injected),
+            source,
         });
+    }
+    for parameter in &parameters {
+        if matches!(
+            parameter.source,
+            ParameterSource::Header { .. } | ParameterSource::Injected(_)
+        ) && captures.iter().any(|name| parameter.ident == name.as_str())
+        {
+            return Err(syn::Error::new_spanned(
+                &parameter.ident,
+                "a header or injected parameter cannot also bind a path capture",
+            ));
+        }
     }
     let mut http_parameters: Vec<_> = parameters
         .iter_mut()
-        .filter(|parameter| !matches!(parameter.source, ParameterSource::Injected(_)))
+        .filter(|parameter| {
+            !matches!(
+                parameter.source,
+                ParameterSource::Injected(_) | ParameterSource::Header { .. }
+            )
+        })
         .collect();
     if http_parameters.len() < captures.len() {
         return Err(syn::Error::new_spanned(
@@ -445,42 +464,18 @@ fn parse_endpoint(
         http_parameters[index].source = ParameterSource::Path(index);
     }
 
-    let parameter_names: BTreeSet<_> = parameters
-        .iter()
-        .map(|parameter| parameter.ident.to_string())
-        .collect();
-    for name in route.headers.keys() {
-        if !parameter_names.contains(name) {
-            return Err(syn::Error::new_spanned(
-                &route.path,
-                format!("headers(...) binds unknown parameter {name}"),
-            ));
-        }
-    }
     let mut body_index = None;
     let mut authentication_parameter = None;
     for parameter in &mut parameters {
-        if matches!(parameter.source, ParameterSource::Injected(_)) {
-            if route.headers.contains_key(&parameter.ident.to_string())
-                || captures.iter().any(|name| parameter.ident == name.as_str())
-            {
-                return Err(syn::Error::new_spanned(
-                    &parameter.ident,
-                    "an injected dependency cannot also bind a path capture or header",
-                ));
-            }
-            continue;
-        }
-        if matches!(parameter.source, ParameterSource::Path(_)) {
+        if matches!(
+            parameter.source,
+            ParameterSource::Injected(_)
+                | ParameterSource::Header { .. }
+                | ParameterSource::Path(_)
+        ) {
             continue;
         }
         if authenticated_inner(&parameter.ty).is_some() {
-            if route.headers.contains_key(&parameter.ident.to_string()) {
-                return Err(syn::Error::new_spanned(
-                    &parameter.ident,
-                    "Authenticated<T> is injected by auth, not headers(...) ",
-                ));
-            }
             if authentication_parameter
                 .replace(parameter.ident.clone())
                 .is_some()
@@ -491,11 +486,6 @@ fn parse_endpoint(
                 ));
             }
             parameter.source = ParameterSource::Authenticated;
-        } else if let Some(name) = route.headers.get(&parameter.ident.to_string()) {
-            parameter.source = ParameterSource::Header {
-                name: name.clone(),
-                optional_inner: option_inner(&parameter.ty),
-            };
         } else if type_name(&parameter.ty) == Some("Query") {
             parameter.source = ParameterSource::QueryObject;
         } else if let Some(inner) = generic_inner(&parameter.ty, "Vec") {

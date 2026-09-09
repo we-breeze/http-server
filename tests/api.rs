@@ -104,13 +104,13 @@ async fn get(
     }
 }
 
-#[brz_http_server::post("/v1/users/:id", headers(trace_id = "x-trace-id"))]
+#[brz_http_server::post("/v1/users/:id")]
 async fn update<'a>(
     #[inject(calls)] calls: &AtomicUsize,
     id: u64,
     verbose: Option<bool>,
     input: UpdateUser<'a>,
-    trace_id: Option<&'a str>,
+    #[header("x-trace-id")] trace_id: Option<&'a str>,
 ) -> ApiResult<UserView<'a>> {
     tokio::task::yield_now().await;
     calls.fetch_add(1, Ordering::Relaxed);
