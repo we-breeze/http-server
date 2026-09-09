@@ -85,6 +85,10 @@ fn main() {
 The default group is `crate::http_apis`. A bare group name resolves from the crate
 root; a nested registry uses its full path in both the function attribute and
 `handlers!`, for example `group = crate::listeners::admin`.
+Group names are logical identifiers. The macros use an internal module prefix,
+so a business module can have the same name as a group, including `http_apis`.
+Keep using the logical name in route attributes and `handlers!`; for a qualified
+path, only the final group segment is mapped to the generated module.
 `registry!(group = admin, auth = AdminAuth, dependencies(...))` fixes that group's
 authenticator type; use `Server::bind_with_authenticator` to supply its instance.
 Set `auth = required` or `auth = optional` on each protected function. The default
