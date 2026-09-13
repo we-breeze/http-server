@@ -74,14 +74,14 @@ pub mod __private {
     };
     pub use crate::json::is_json_content_type;
     pub use crate::json::{json_body, json_response, json_result_response};
-    pub use crate::params::{QueryParams, decode_path, query_object};
+    pub use crate::params::{QueryParams, query_object};
     #[cfg(feature = "macros")]
     pub use crate::registry::{ApiRegistration, collect};
     pub use crate::reply::kind;
     pub use crate::reply::{response, result_response};
-    pub use crate::route::{RouteMatch, match_route};
+    pub use crate::route::{DecodedRouteMatch, RouteMatch, match_route};
     pub use crate::router::unmatched;
-    pub use crate::router::{PreparedRoute, RouteDescriptor};
+    pub use crate::router::{PreparedRoute, RouteDescriptor, RouteProgram};
     #[cfg(feature = "macros")]
     pub use inventory;
 }

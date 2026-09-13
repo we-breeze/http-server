@@ -9,14 +9,14 @@ use crate::{
 };
 
 mod index;
-pub use index::{PreparedRoute, RouteDescriptor};
+pub use index::{PreparedRoute, RouteDescriptor, RouteProgram};
 use index::{RegisteredRoute, RouteIndex};
 
 /// Composes API instances without growing the handler or future type.
 ///
 /// Routes are indexed once before serving. Static paths use byte-length buckets;
-/// parameter paths use segment-count buckets. Only the selected handler's future
-/// is boxed. Each API retains its own application state.
+/// parameter paths use segment-count and final-literal buckets. Only the selected
+/// handler's future is boxed. Each API retains its own application state.
 pub struct Router<A: Authenticator = NoAuthenticator> {
     handlers: Vec<Box<dyn ErasedHandler<A>>>,
     routes: Vec<RegisteredRoute>,

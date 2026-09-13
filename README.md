@@ -200,6 +200,9 @@ async fn update<'a>(
 
 Invalid parameters return `400`; JSON body routes reject non-JSON content types
 with `415`. Query strings are URL-decoded and `Vec<T>` receives repeated keys.
+Path routing establishes segment boundaries from raw `/` bytes before decoding
+each segment, so `%2F` stays within one capture and is passed to the function as
+`/`. Path captures and query values are each percent-decoded exactly once.
 `Query<T>`, `Form<T>`, `Multipart`, `Body`, and `&[u8]` retain their existing
 query/body extraction behavior. Business failures use `ApiResult<T>` and
 `ApiError`, while custom statuses, redirects, and streams remain supported.

@@ -3,7 +3,7 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use brz_http_server::__private::{RouteDescriptor, decode_path, match_route};
+use brz_http_server::__private::{RouteDescriptor, match_route};
 use brz_http_server::{
     ApiMetrics, Handler, NoAuthenticator, Request, Response, Router, StatusCode,
 };
@@ -41,10 +41,25 @@ impl Api {
             methods: 2,
             priority: (1 << 24) + (4 - index) * 1024 + 4,
             metrics,
+            program: None,
         })
         .collect::<Vec<_>>();
         Self {
             descriptors: Box::leak(routes.into_boxed_slice()),
+        }
+    }
+
+    fn suffix(id: usize) -> Self {
+        let path = format!("/api/:id/action-{id:04}");
+        let routes = Box::leak(Box::new([RouteDescriptor {
+            path: Box::leak(path.into_boxed_str()),
+            methods: 2,
+            priority: (1 << 24) + 3 * 1024 + 4,
+            metrics,
+            program: None,
+        }]));
+        Self {
+            descriptors: routes,
         }
     }
 }
@@ -54,24 +69,21 @@ impl Handler for Api {
         self.descriptors
     }
     fn route_priority(&self, path: &str, method: &str) -> Option<usize> {
-        let path = decode_path(path);
         self.descriptors
             .iter()
-            .find(|route| method == "GET" && match_route(&path, route.path).is_some())
+            .find(|route| method == "GET" && match_route(path, route.path).is_some())
             .map(|route| route.priority)
     }
     fn route_metrics(&self, path: &str, _method: &str) -> Option<(usize, ApiMetrics)> {
-        let path = decode_path(path);
         self.descriptors
             .iter()
-            .find(|route| match_route(&path, route.path).is_some())
+            .find(|route| match_route(path, route.path).is_some())
             .map(|route| (route.priority, metrics()))
     }
     fn route_methods(&self, path: &str) -> u16 {
-        let path = decode_path(path);
         self.descriptors
             .iter()
-            .filter(|route| match_route(&path, route.path).is_some())
+            .filter(|route| match_route(path, route.path).is_some())
             .fold(0, |bits, route| bits | route.methods)
     }
     // Keep fixtures on the same async trait API as real handlers.
@@ -159,4 +171,12 @@ fn main() {
             measure(&flat, &path)
         );
     }
+    let suffix = (0..512)
+        .map(Api::suffix)
+        .fold(Router::default(), Router::merge);
+    let _ = suffix.prepare("/api/123/action-0511", "GET");
+    println!(
+        "buckets(512 APIs), literal-suffix-last\t{:.0}",
+        measure(&suffix, "/api/123/action-0511")
+    );
 }

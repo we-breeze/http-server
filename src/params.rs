@@ -48,10 +48,12 @@ pub fn query_object<T: DeserializeOwned>(
     serde_html_form::from_str(raw.unwrap_or_default()).map(Query)
 }
 
-#[doc(hidden)]
-#[must_use]
-pub fn decode_path(raw: &str) -> Cow<'_, str> {
-    percent_encoding::percent_decode_str(raw).decode_utf8_lossy()
+pub(crate) fn decode_component(raw: &str) -> Cow<'_, str> {
+    if raw.as_bytes().contains(&b'%') {
+        percent_encoding::percent_decode_str(raw).decode_utf8_lossy()
+    } else {
+        Cow::Borrowed(raw)
+    }
 }
 
 #[cfg(test)]
@@ -66,6 +68,5 @@ mod tests {
         assert_eq!(params.get("q"), Some("hello world+&x=y 中"));
         assert_eq!(params.values("ids").collect::<Vec<_>>(), ["1", "2"]);
         assert_eq!(params.get("x"), None);
-        assert_eq!(decode_path("/a+b%2Fc"), "/a+b/c");
     }
 }

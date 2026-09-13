@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::cmp::Reverse;
 use std::collections::HashMap;
 
-use crate::{ApiMetrics, params::decode_path, route::RouteMatch};
+use crate::{ApiMetrics, params::decode_component, route::RouteMatch};
 
 const STATIC_BUCKETS: usize = 128;
 const INLINE_SEGMENTS: usize = 32;
@@ -15,6 +15,19 @@ pub struct RouteDescriptor {
     pub methods: u16,
     pub priority: usize,
     pub metrics: fn() -> ApiMetrics,
+    /// Macro-generated segment program. Handwritten descriptors may leave this
+    /// as `None` and use the startup parser for compatibility.
+    pub program: Option<RouteProgram>,
+}
+
+/// A route template compiled by the API macro into constant matching data.
+#[doc(hidden)]
+#[derive(Clone, Copy)]
+pub struct RouteProgram {
+    pub segments: usize,
+    pub literals: &'static [(usize, &'static str)],
+    pub parameters: &'static [usize],
+    pub catch_all: Option<usize>,
 }
 
 pub(super) struct RegisteredRoute {
@@ -30,26 +43,26 @@ pub(super) struct Target {
     pub priority: usize,
 }
 
-/// A request's routing decision. Capture offsets avoid a self-reference when
-/// percent decoding owns the path. Keep this alive through body reading/calling.
+/// A request's routing decision. Keep this alive through body reading/calling
+/// so decoded capture values remain available to borrowed handler parameters.
 pub struct PreparedRoute<'p> {
-    path: Cow<'p, str>,
+    path: &'p str,
     pub(super) target: Option<Target>,
     pub(super) metric: Option<(usize, ApiMetrics)>,
     metric_owner: usize,
     pub(super) allowed: u16,
-    ranges: CaptureRanges,
+    captures: CaptureValues<'p>,
 }
 
 impl<'p> PreparedRoute<'p> {
     pub(crate) fn legacy(path: &'p str, metric: Option<(usize, ApiMetrics)>) -> Self {
         Self {
-            path: Cow::Borrowed(path),
+            path,
             target: None,
             metric,
             metric_owner: usize::MAX,
             allowed: 0,
-            ranges: CaptureRanges::default(),
+            captures: CaptureValues::default(),
         }
     }
 
@@ -59,10 +72,17 @@ impl<'p> PreparedRoute<'p> {
     }
 
     pub(super) fn captures(&self) -> RouteMatch<'_> {
-        RouteMatch::from_ranges(&self.path, &self.ranges.values[..self.ranges.len])
+        let captures = std::array::from_fn(|index| self.captures.values[index].as_deref());
+        RouteMatch::from_captures(captures, self.captures.len)
     }
 
-    fn consider(&mut self, entry: &Entry, ranges: CaptureRanges, method: u16) -> bool {
+    fn consider(
+        &mut self,
+        entry: &Entry,
+        ranges: CaptureRanges,
+        method: u16,
+        encoded: bool,
+    ) -> bool {
         self.allowed |= entry.methods;
         let metric = Some((entry.priority, entry.metrics));
         if self
@@ -82,7 +102,7 @@ impl<'p> PreparedRoute<'p> {
         });
         self.metric = metric;
         self.metric_owner = entry.handler;
-        self.ranges = ranges;
+        self.captures = CaptureValues::from_ranges(self.path, &ranges, encoded);
         true
     }
 
@@ -120,6 +140,36 @@ impl<'p> PreparedRoute<'p> {
     }
 }
 
+struct CaptureValues<'p> {
+    values: [Option<Cow<'p, str>>; 8],
+    len: usize,
+}
+
+impl Default for CaptureValues<'_> {
+    fn default() -> Self {
+        Self {
+            values: std::array::from_fn(|_| None),
+            len: 0,
+        }
+    }
+}
+
+impl<'p> CaptureValues<'p> {
+    fn from_ranges(path: &'p str, ranges: &CaptureRanges, encoded: bool) -> Self {
+        let mut result = Self::default();
+        for (slot, &(start, end)) in result.values.iter_mut().zip(&ranges.values[..ranges.len]) {
+            let value = &path[start..end];
+            *slot = Some(if encoded {
+                decode_component(value)
+            } else {
+                Cow::Borrowed(value)
+            });
+        }
+        result.len = ranges.len;
+        result
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 struct CaptureRanges {
     values: [(usize, usize); 8],
@@ -140,6 +190,13 @@ struct Bucket {
     end: usize,
 }
 
+struct ParameterBucket {
+    segments: usize,
+    range: Bucket,
+    suffix_literals: HashMap<&'static str, Vec<usize>>,
+    suffix_parameters: Vec<usize>,
+}
+
 struct Entry {
     path: &'static str,
     handler: usize,
@@ -156,20 +213,33 @@ struct Entry {
 impl Entry {
     fn new(route: &RegisteredRoute) -> Self {
         let descriptor = route.descriptor;
-        let mut literals = Vec::new();
-        let mut parameters = Vec::new();
-        let mut catch_all = None;
-        let mut segments = 0;
-        for (position, segment) in descriptor.path.split('/').enumerate() {
-            segments += 1;
-            if segment.starts_with('*') {
-                catch_all = Some(position);
-            } else if segment.starts_with(':') {
-                parameters.push(position);
-            } else {
-                literals.push((position, segment));
-            }
-        }
+        let (segments, literals, parameters, catch_all) = descriptor.program.map_or_else(
+            || {
+                let mut literals = Vec::new();
+                let mut parameters = Vec::new();
+                let mut catch_all = None;
+                let mut segments = 0;
+                for (position, segment) in descriptor.path.split('/').enumerate() {
+                    segments += 1;
+                    if segment.starts_with('*') {
+                        catch_all = Some(position);
+                    } else if segment.starts_with(':') {
+                        parameters.push(position);
+                    } else {
+                        literals.push((position, segment));
+                    }
+                }
+                (segments, literals, parameters, catch_all)
+            },
+            |program| {
+                (
+                    program.segments,
+                    program.literals.to_vec(),
+                    program.parameters.to_vec(),
+                    program.catch_all,
+                )
+            },
+        );
         Self {
             path: descriptor.path,
             handler: route.handler,
@@ -188,7 +258,7 @@ impl Entry {
         (Reverse(self.priority), self.handler, self.endpoint)
     }
 
-    fn matches(&self, path: &str, segments: &Segments) -> Option<CaptureRanges> {
+    fn matches(&self, path: &str, segments: &Segments, encoded: bool) -> Option<CaptureRanges> {
         if let Some(prefix) = self.catch_all {
             if segments.len < prefix {
                 return None;
@@ -198,7 +268,12 @@ impl Entry {
         }
         for &(position, literal) in &self.literals {
             let (start, end) = segments.get(position)?;
-            if &path[start..end] != literal {
+            let actual = &path[start..end];
+            if if encoded {
+                decode_component(actual) != literal
+            } else {
+                actual != literal
+            } {
                 return None;
             }
         }
@@ -264,7 +339,9 @@ pub(super) struct RouteIndex {
     static_buckets: [Bucket; STATIC_BUCKETS],
     long_buckets: Vec<(usize, Bucket)>,
     statics: Vec<Entry>,
-    parameter_buckets: Vec<(usize, Bucket)>,
+    static_segment_buckets: Vec<(usize, Bucket)>,
+    static_segments: Vec<usize>,
+    parameter_buckets: Vec<ParameterBucket>,
     parameters: Vec<Entry>,
     wildcards: Vec<Entry>,
 }
@@ -316,11 +393,46 @@ impl RouteIndex {
                 long_buckets.push((length, bucket));
             }
         }
-        let parameter_buckets = buckets(&parameters, |entry| entry.segments);
+        let mut static_segments = (0..statics.len()).collect::<Vec<_>>();
+        static_segments.sort_by_key(|&index| (statics[index].segments, statics[index].key()));
+        let static_segment_buckets =
+            index_buckets(&static_segments, |index| statics[*index].segments);
+
+        let parameter_buckets = buckets(&parameters, |entry| entry.segments)
+            .into_iter()
+            .map(|(segments, range)| {
+                let mut suffix_literals: HashMap<&'static str, Vec<usize>> = HashMap::new();
+                let mut suffix_parameters = Vec::new();
+                for (index, entry) in parameters
+                    .iter()
+                    .enumerate()
+                    .take(range.end)
+                    .skip(range.start)
+                {
+                    if let Some((_, literal)) = entry
+                        .literals
+                        .iter()
+                        .find(|(position, _)| *position + 1 == entry.segments)
+                    {
+                        suffix_literals.entry(literal).or_default().push(index);
+                    } else {
+                        suffix_parameters.push(index);
+                    }
+                }
+                ParameterBucket {
+                    segments,
+                    range,
+                    suffix_literals,
+                    suffix_parameters,
+                }
+            })
+            .collect();
         Self {
             static_buckets,
             long_buckets,
             statics,
+            static_segment_buckets,
+            static_segments,
             parameter_buckets,
             parameters,
             wildcards,
@@ -329,44 +441,150 @@ impl RouteIndex {
 
     pub(super) fn resolve<'p>(&self, raw_path: &'p str, method: &str) -> PreparedRoute<'p> {
         let mut result = PreparedRoute::legacy(raw_path, None);
-        result.path = decode_path(raw_path);
         let method = method_bit(method);
-        let length = result.path.len();
+        let length = raw_path.len();
         let bucket = self
             .static_buckets
             .get(length)
             .copied()
             .unwrap_or_else(|| find_bucket(&self.long_buckets, length));
         for entry in &self.statics[bucket.start..bucket.end] {
-            if result.path == entry.path && result.consider(entry, CaptureRanges::default(), method)
+            if raw_path == entry.path
+                && result.consider(entry, CaptureRanges::default(), method, false)
             {
                 return result;
             }
         }
-        if self.parameters.is_empty() && self.wildcards.is_empty() {
+        let encoded = raw_path.as_bytes().contains(&b'%');
+        let encoded_static = encoded && !self.statics.is_empty();
+        if !encoded_static && self.parameters.is_empty() && self.wildcards.is_empty() {
             return result;
         }
-        let segments = Segments::new(&result.path);
-        let bucket = find_bucket(&self.parameter_buckets, segments.len);
-        for entry in &self.parameters[bucket.start..bucket.end] {
-            if let Some(captures) = entry.matches(&result.path, &segments) {
-                if result.consider(entry, captures, method) {
+        let segments = Segments::new(raw_path);
+        if encoded_static {
+            let bucket = find_bucket(&self.static_segment_buckets, segments.len);
+            for &index in &self.static_segments[bucket.start..bucket.end] {
+                let entry = &self.statics[index];
+                if let Some(captures) = entry.matches(raw_path, &segments, encoded) {
+                    if result.consider(entry, captures, method, encoded) {
+                        return result;
+                    }
+                }
+            }
+        }
+        if let Some(bucket) = find_parameter_bucket(&self.parameter_buckets, segments.len) {
+            if bucket.suffix_literals.is_empty() {
+                for entry in &self.parameters[bucket.range.start..bucket.range.end] {
+                    if let Some(captures) = entry.matches(raw_path, &segments, encoded) {
+                        if result.consider(entry, captures, method, encoded) {
+                            return result;
+                        }
+                    }
+                }
+            } else {
+                let suffix_literals = segments
+                    .get(segments.len - 1)
+                    .map(|(start, end)| {
+                        let value = &raw_path[start..end];
+                        if encoded {
+                            decode_component(value)
+                        } else {
+                            Cow::Borrowed(value)
+                        }
+                    })
+                    .as_deref()
+                    .and_then(|last| bucket.suffix_literals.get(last))
+                    .map_or(&[][..], Vec::as_slice);
+                if self.resolve_parameter_candidates(
+                    &mut result,
+                    &segments,
+                    method,
+                    encoded,
+                    suffix_literals,
+                    &bucket.suffix_parameters,
+                ) {
                     return result;
                 }
             }
         }
         for entry in &self.wildcards {
-            if let Some(captures) = entry.matches(&result.path, &segments) {
-                if result.consider(entry, captures, method) {
+            if let Some(captures) = entry.matches(raw_path, &segments, encoded) {
+                if result.consider(entry, captures, method, encoded) {
                     return result;
                 }
             }
         }
         result
     }
+
+    fn resolve_parameter_candidates(
+        &self,
+        result: &mut PreparedRoute<'_>,
+        segments: &Segments,
+        method: u16,
+        encoded: bool,
+        suffix_literals: &[usize],
+        suffix_parameters: &[usize],
+    ) -> bool {
+        let mut literal = 0;
+        let mut parameter = 0;
+        while literal < suffix_literals.len() || parameter < suffix_parameters.len() {
+            let index = match (
+                suffix_literals.get(literal).copied(),
+                suffix_parameters.get(parameter).copied(),
+            ) {
+                (Some(left), Some(right)) => {
+                    if self.parameters[left].key() <= self.parameters[right].key() {
+                        literal += 1;
+                        left
+                    } else {
+                        parameter += 1;
+                        right
+                    }
+                }
+                (Some(index), None) => {
+                    literal += 1;
+                    index
+                }
+                (None, Some(index)) => {
+                    parameter += 1;
+                    index
+                }
+                (None, None) => unreachable!(),
+            };
+            let entry = &self.parameters[index];
+            if let Some(captures) = entry.matches(result.path, segments, encoded) {
+                if result.consider(entry, captures, method, encoded) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 }
 
 fn buckets(entries: &[Entry], key: impl Fn(&Entry) -> usize) -> Vec<(usize, Bucket)> {
+    let mut result: Vec<(usize, Bucket)> = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let key = key(entry);
+        if let Some((last, bucket)) = result.last_mut() {
+            if *last == key {
+                bucket.end = index + 1;
+                continue;
+            }
+        }
+        result.push((
+            key,
+            Bucket {
+                start: index,
+                end: index + 1,
+            },
+        ));
+    }
+    result
+}
+
+fn index_buckets(entries: &[usize], key: impl Fn(&usize) -> usize) -> Vec<(usize, Bucket)> {
     let mut result: Vec<(usize, Bucket)> = Vec::new();
     for (index, entry) in entries.iter().enumerate() {
         let key = key(entry);
@@ -392,6 +610,13 @@ fn find_bucket(buckets: &[(usize, Bucket)], key: usize) -> Bucket {
         .binary_search_by_key(&key, |(key, _)| *key)
         .ok()
         .map_or_else(Bucket::default, |index| buckets[index].1)
+}
+
+fn find_parameter_bucket(buckets: &[ParameterBucket], segments: usize) -> Option<&ParameterBucket> {
+    buckets
+        .binary_search_by_key(&segments, |bucket| bucket.segments)
+        .ok()
+        .map(|index| &buckets[index])
 }
 
 fn method_bit(method: &str) -> u16 {
@@ -437,6 +662,7 @@ mod tests {
                 methods,
                 priority,
                 metrics,
+                program: None,
             },
         }
     }
@@ -478,6 +704,7 @@ mod tests {
             "/api/users/a/b",
             "/api/users//skills",
             "/api//literal",
+            "/api/%75sers/byname",
             "/api/%75sers/123",
             "/api/users/a%2Fb",
             "/api/users/%E4%B8%AD",
@@ -488,11 +715,10 @@ mod tests {
             for method in [
                 "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "CUSTOM",
             ] {
-                let path_decoded = decode_path(path);
                 let mut expected = None;
                 let mut allowed = 0;
                 for route in &routes {
-                    if let Some(captures) = match_route(&path_decoded, route.descriptor.path) {
+                    if let Some(captures) = match_route(path, route.descriptor.path) {
                         allowed |= route.descriptor.methods;
                         if route.descriptor.methods & method_bit(method) != 0
                             && expected.as_ref().is_none_or(|(priority, _, _)| {
@@ -508,7 +734,9 @@ mod tests {
                     actual
                         .target
                         .map(|target| (target.priority, target.handler)),
-                    expected.map(|(priority, handler, _)| (priority, handler)),
+                    expected
+                        .as_ref()
+                        .map(|(priority, handler, _)| (*priority, *handler)),
                     "{method} {path}"
                 );
                 assert_eq!(index.resolve(path, "").allowed, allowed, "Allow: {path}");

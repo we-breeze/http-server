@@ -61,6 +61,8 @@ The route-level `headers(...)` syntax is no longer supported.
 `Authenticated<T>` is supplied by the authentication layer. A parameter cannot
 bind both a dependency and a path capture or header. Functions remain directly
 callable with ordinary Rust arguments, including borrowed inputs and outputs.
+Raw `/` bytes establish path segment boundaries before capture decoding, so an
+encoded `%2F` remains inside one capture and is delivered to the function as `/`.
 
 For a dependency-free group, use `registry!()` and `handlers!()`.
 Modules enroll their functions through normal `mod` inclusion, with no filesystem

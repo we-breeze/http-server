@@ -70,6 +70,80 @@ const CASES: [(&str, ValueKind); 11] = [
     ("/svc/v2/events/$", ValueKind::Text),
 ];
 
+// Synthetic equivalents of the production route-shape matrix. Literal names
+// are deliberately opaque; `$` marks one nonempty captured segment.
+const SHAPE_MATRIX: [(&str, usize); 28] = [
+    ("/probe/a/$", 0),
+    ("/probe/a/$/b", 1),
+    ("/probe/a/$/c", 2),
+    ("/probe/a/d/$/e", 3),
+    ("/probe/f/g/a/$/h", 4),
+    ("/probe/f/g/i/$", 5),
+    ("/probe/f/j/$/k", 6),
+    ("/probe/l/$", 7),
+    ("/probe/l/$/m", 8),
+    ("/probe/l/$/n", 9),
+    ("/probe/o/p/$/q", 10),
+    ("/probe/r/$", 11),
+    ("/probe/r/$/s/t", 12),
+    ("/probe/r/$/u", 13),
+    ("/probe/r/$/v/w", 14),
+    ("/probe/r/$/v/x", 15),
+    ("/probe/r/$/v/y", 16),
+    ("/probe/r/$/z", 17),
+    ("/probe/r/$/j", 18),
+    ("/probe/aa/$/j", 19),
+    ("/probe/ab/ac/$/ad", 20),
+    ("/probe/ab/ac/$/ae", 21),
+    ("/probe/ab/ac/$/af", 22),
+    ("/probe/ab/ac/$/ag", 23),
+    ("/probe/ab/ac/$/ah", 24),
+    ("/probe/ab/ai/j/$/b", 25),
+    ("/probe/ab/aj/$", 26),
+    ("/probe/ak/al/$/l", 27),
+];
+
+brz_http_server::registry!(group = shape_matrix, dependencies(calls: Arc<AtomicUsize>));
+
+macro_rules! shape_route {
+    ($name:ident, $marker:literal, $path:literal) => {
+        #[brz_http_server::get($path, group = shape_matrix)]
+        async fn $name(#[inject(calls)] calls: &AtomicUsize, value: &str) -> (usize, String) {
+            calls.fetch_add(1, Ordering::Relaxed);
+            ($marker, value.to_owned())
+        }
+    };
+}
+
+shape_route!(shape_00, 0, "/probe/a/:value");
+shape_route!(shape_01, 1, "/probe/a/:value/b");
+shape_route!(shape_02, 2, "/probe/a/:value/c");
+shape_route!(shape_03, 3, "/probe/a/d/:value/e");
+shape_route!(shape_04, 4, "/probe/f/g/a/:value/h");
+shape_route!(shape_05, 5, "/probe/f/g/i/:value");
+shape_route!(shape_06, 6, "/probe/f/j/:value/k");
+shape_route!(shape_07, 7, "/probe/l/:value");
+shape_route!(shape_08, 8, "/probe/l/:value/m");
+shape_route!(shape_09, 9, "/probe/l/:value/n");
+shape_route!(shape_10, 10, "/probe/o/p/:value/q");
+shape_route!(shape_11, 11, "/probe/r/:value");
+shape_route!(shape_12, 12, "/probe/r/:value/s/t");
+shape_route!(shape_13, 13, "/probe/r/:value/u");
+shape_route!(shape_14, 14, "/probe/r/:value/v/w");
+shape_route!(shape_15, 15, "/probe/r/:value/v/x");
+shape_route!(shape_16, 16, "/probe/r/:value/v/y");
+shape_route!(shape_17, 17, "/probe/r/:value/z");
+shape_route!(shape_18, 18, "/probe/r/:value/j");
+shape_route!(shape_19, 19, "/probe/aa/:value/j");
+shape_route!(shape_20, 20, "/probe/ab/ac/:value/ad");
+shape_route!(shape_21, 21, "/probe/ab/ac/:value/ae");
+shape_route!(shape_22, 22, "/probe/ab/ac/:value/af");
+shape_route!(shape_23, 23, "/probe/ab/ac/:value/ag");
+shape_route!(shape_24, 24, "/probe/ab/ac/:value/ah");
+shape_route!(shape_25, 25, "/probe/ab/ai/j/:value/b");
+shape_route!(shape_26, 26, "/probe/ab/aj/:value");
+shape_route!(shape_27, 27, "/probe/ak/al/:value/l");
+
 fn fixture_router(reverse: bool, calls: &Arc<AtomicUsize>) -> Router {
     let mut groups = vec![
         brz_http_server::handlers!(calls = calls.clone(); group = crate::parcel_api::http_apis).unwrap(),
@@ -138,6 +212,32 @@ impl Running {
 }
 
 #[tokio::test]
+async fn synthetic_shape_matrix_selects_every_dynamic_route() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let router = brz_http_server::handlers!(calls = calls.clone(); group = shape_matrix).unwrap();
+    let server = Running::start(router).await;
+    for (pattern, marker) in SHAPE_MATRIX {
+        server
+            .expect_capture(&pattern.replace('$', "plain-value"), marker, "plain-value")
+            .await;
+        server
+            .expect_capture(&pattern.replace('$', "left%2Fright"), marker, "left/right")
+            .await;
+        let (status, headers, _) = server
+            .request("DELETE", &pattern.replace('$', "plain-value"))
+            .await;
+        assert_eq!(status, 405, "{pattern}");
+        assert!(
+            headers.to_ascii_lowercase().contains("\r\nallow: get"),
+            "{pattern}: {headers}"
+        );
+    }
+    assert_eq!(server.request("GET", "/probe/r/v/v/none").await.0, 404);
+    assert_eq!(calls.load(Ordering::Relaxed), SHAPE_MATRIX.len() * 2);
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn all_eleven_shapes_capture_values_in_both_registration_orders() {
     for reverse in [false, true] {
         let calls = Arc::new(AtomicUsize::new(0));
@@ -151,7 +251,8 @@ async fn all_eleven_shapes_capture_values_in_both_registration_orders() {
                     .await;
                 expected_calls += 1;
             }
-            // Decode before bucketing and keep query slashes out of the path.
+            // Decode captures after raw slash boundaries are established, and
+            // keep query slashes out of the path.
             server
                 .expect_capture(
                     &format!("{}?ignored=/wrong/branch", pattern.replace('$', "%34%32")),
@@ -200,7 +301,6 @@ async fn malformed_shapes_and_wrong_methods_never_invoke_business_handlers() {
         for invalid in [
             pattern.replace('$', ""),
             pattern.replace('$', "42/extra"),
-            pattern.replace('$', "42%2Fextra"),
             format!("{path}/"),
             format!("{path}/extra"),
             path.replacen("/svc/", "/elsewhere/", 1),
@@ -233,6 +333,21 @@ async fn malformed_shapes_and_wrong_methods_never_invoke_business_handlers() {
         assert_eq!(server.request("GET", invalid).await.0, 404, "GET {invalid}");
     }
     assert_eq!(calls.load(Ordering::Relaxed), 0);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn encoded_slashes_stay_inside_one_decoded_capture() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let server = Running::start(fixture_router(false, &calls)).await;
+    server
+        .expect_capture("/svc/v2/events/a%2Fb", 10, "a/b")
+        .await;
+    server
+        .expect_capture("/svc/v2/events/a%252Fb", 10, "a%2Fb")
+        .await;
+    assert_eq!(server.request("GET", "/svc/v2/events/a/b").await.0, 404);
+    assert_eq!(calls.load(Ordering::Relaxed), 2);
     server.stop().await;
 }
 
