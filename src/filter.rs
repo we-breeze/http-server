@@ -173,9 +173,13 @@ mod tests {
     }
 
     impl Handler for Echo {
-        async fn call(&self, _request: Request<'_>, _authenticator: &NoAuthenticator) -> Response {
+        fn call(
+            &self,
+            _request: Request<'_>,
+            _authenticator: &NoAuthenticator,
+        ) -> impl Future<Output = Response> {
             self.calls.fetch_add(1, Ordering::Relaxed);
-            Response::static_bytes(StatusCode::OK, b"ok")
+            std::future::ready(Response::static_bytes(StatusCode::OK, b"ok"))
         }
     }
 
