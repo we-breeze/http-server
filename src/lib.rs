@@ -22,6 +22,7 @@ mod body;
 mod cors;
 mod error;
 mod extract;
+mod filter;
 mod json;
 mod params;
 #[cfg(feature = "macros")]
@@ -45,6 +46,7 @@ pub use bytes::Bytes;
 pub use cors::Cors;
 pub use error::{Error, Result};
 pub use extract::{ExtractError, FromHeader, FromPath, FromQuery};
+pub use filter::{FilterDecision, Filtered, HandlerExt, HttpFilter};
 pub use futures_util::Stream;
 pub use json::{ApiError, ApiResult, IntoHttpError};
 pub use params::Query;

@@ -139,6 +139,12 @@ impl Response {
         Self::new(status, ResponseBody::Owned(body.into()))
     }
 
+    /// Creates a response backed by a bounded, cancellation-aware byte stream.
+    #[must_use]
+    pub fn stream(status: StatusCode, body: crate::ResponseStream) -> Self {
+        Self::new(status, ResponseBody::Stream(body))
+    }
+
     #[must_use]
     pub fn with_status(mut self, status: StatusCode) -> Self {
         if !self.conversion_failed {

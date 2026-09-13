@@ -7,7 +7,7 @@ use crate::{EphemeralBytesArena, EphemeralBytesMut};
 /// The request is valid only for the duration of
 /// [`Handler::call`](crate::Handler::call). In particular, a handler must not
 /// return a response that borrows `body`, `target`, or `headers`.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Request<'a> {
     method: &'a str,
     target: &'a str,

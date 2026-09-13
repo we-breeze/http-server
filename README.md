@@ -35,6 +35,42 @@ Finite download streams support automatic chunked response framing or a known
 `Content-Length`. Chunked request bodies, `Expect: 100-continue`, HTTP/2,
 SSE-specific behavior, and WebSockets remain outside this release.
 
+Protocol gateways that need transparent chunked uploads or HTTP upgrades should
+own that transport boundary in their integration crate and dispatch ordinary
+application requests into this server. Those proxy policies are intentionally
+not coupled to the Breeze runtime.
+
+## HTTP filters
+
+Use `HandlerExt::with_filter` to compose transport-independent request and
+response policy around any handler. A filter can short-circuit before parameter
+extraction and can transform both successful and rejected responses. Nesting
+filters preserves middleware ordering: request hooks run outside-in and response
+hooks run inside-out.
+
+```rust,no_run
+use brz_http_server::{FilterDecision, HandlerExt, HttpFilter, Request, Response};
+
+struct Maintenance;
+
+impl HttpFilter for Maintenance {
+    fn before(&self, request: &Request<'_>) -> FilterDecision {
+        if request.path().starts_with("/internal/") {
+            FilterDecision::respond(Response::empty(
+                brz_http_server::StatusCode::SERVICE_UNAVAILABLE,
+            ))
+        } else {
+            FilterDecision::Continue
+        }
+    }
+}
+
+# fn decorate<H: brz_http_server::Handler>(handler: H) -> impl brz_http_server::Handler {
+let handler = handler.with_filter(Maintenance);
+# handler
+# }
+```
+
 ## API macros
 
 Enable the `macros` and `metrics` features. Define one async free function per route and use
