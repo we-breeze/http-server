@@ -153,6 +153,7 @@ mod tests {
             methods,
             priority,
             metrics,
+            program: None,
         }
     }
 

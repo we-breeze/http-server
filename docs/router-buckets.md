@@ -8,11 +8,14 @@ within a group share one container of named dependencies.
 
 ## Registration and indexing
 
-Each function route macro emits a path/method descriptor and an
-endpoint dispatcher. A descriptor contains the template, methods,
-priority and fixed metric factory. `merge` appends descriptors and one boxed API
-instance. Merging another Router moves its entries into the destination and
-rebases handler identifiers; it never retains a nested Router as a handler.
+Each function route macro emits a path/method descriptor, a constant segment
+program, and an endpoint dispatcher. The segment program contains literal and
+capture positions, segment count, and an optional terminal catch-all position;
+the router does not parse macro-generated templates at startup. A descriptor
+also contains the methods, priority and fixed metric factory. `merge` appends
+descriptors and one boxed API instance. Merging another Router moves its entries
+into the destination and rebases handler identifiers; it never retains a nested
+Router as a handler. Handwritten descriptors retain a startup parsing fallback.
 
 A `OnceLock` builds the immutable index during metric registration at server
 startup (or the first explicit route query). Further merges invalidate the index.
@@ -23,25 +26,31 @@ Entries are stored contiguously within buckets:
 - Longer static paths use a sorted directory keyed by byte length. There is no
   new URL length limit.
 - Parameter templates use a sorted directory keyed by segment count. Templates
-  are parsed once into literal checks and capture positions. Literal checks are
+  ending in a literal use that final segment as a secondary hash index; routes
+  ending in a parameter form a fallback list. The two candidate lists are merged
+  in priority order without a request allocation. Remaining literal checks are
   ordered by their frequency within that segment-count bucket, checking rarer
   literals first and preferring suffixes on ties.
 - Terminal catch-all templates are stored separately in priority order; they
   can also match an empty remainder.
 
-The request path is decoded once using the existing lossy UTF-8 percent-decoding
-rules, after separating the query. Static hits require no path segmentation.
-Parameter/catch-all lookup records segment offsets once on a 32-slot stack fast
-path, with a vector fallback for deeper URLs. Leading, trailing and interior
-empty segments are retained. Up to eight captured values use inline offsets;
-values continue to borrow the decoded path. No candidate handler Future is
-created during lookup.
+The raw request path is separated from the query before routing. Raw `/` bytes
+establish segment boundaries, then individual segments are percent-decoded for
+literal comparison and selected captures. Thus `%2F` remains inside one route
+segment while the handler receives `/`; selected captures are decoded once. Plain
+static hits require neither segmentation nor decoding. An encoded static path
+which misses that fast path uses a segment-count fallback so, for example,
+`/users/%E4%B8%AD` matches `/users/中`. Parameter/catch-all lookup records raw
+segment offsets once on a 32-slot stack fast path, with a vector fallback for
+deeper URLs. Leading, trailing and interior empty segments are retained. Up to
+eight selected captures borrow raw segments when possible and own only decoded
+values that require it. No candidate handler Future is created during lookup.
 
 ## Selection and invocation
 
 The server prepares the route immediately after parsing the request head,
-before reading the body. The decision owns or borrows the decoded path and keeps
-handler/group identifiers, capture offsets, metrics and allowed methods. This
+before reading the body. The decision borrows the raw path and keeps decoded
+selected captures, handler/group identifiers, metrics and allowed methods. This
 same decision supplies timeout/body-read metrics and subsequent dispatch.
 
 Static path hits return immediately only when the method also matches. Otherwise
@@ -95,14 +104,15 @@ One local optimized run (ns/op; machine/load dependent):
 
 | Case, 24 APIs / 48 routes | Previous Router | Bucket index |
 | --- | ---: | ---: |
-| Static, first API | 72,072 | 82 |
-| Static, last API | 5,884 | 148 |
-| Parameter, first API | 68,442 | 167 |
-| Parameter, last API | 5,697 | 364 |
-| Unmatched path | 73,023 | 293 |
+| Static, first API | 63,439 | 67 |
+| Static, last API | 5,203 | 111 |
+| Parameter, first API | 65,282 | 165 |
+| Parameter, last API | 5,602 | 385 |
+| Unmatched path | 68,730 | 264 |
 
-Parameter hits in the last API measured 1,205 ns at 128 APIs and 4,596 ns at
-512 APIs. These fixtures deliberately put all parameter routes in the same
-segment-count bucket, illustrating the remaining linear candidate scan. Large
-buckets can receive a secondary literal-position index in a future change;
-that optimization is not required to eliminate merge depth or repeated lookup.
+Parameter hits in the last API measured 1,332 ns at 128 APIs and 5,070 ns at
+512 APIs. These fixtures deliberately end every parameter route in a capture,
+so they share the fallback list and illustrate its remaining linear scan. A
+separate 512-route fixture with distinct literal suffixes measured 340 ns using
+the secondary index. A future index may select a discriminating literal at any
+position for large terminal-capture buckets.

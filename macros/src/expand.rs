@@ -185,7 +185,7 @@ fn expand_adapter(
         let priority = if path.split('/').any(|segment| segment.starts_with('*')) { 0 } else { 1 << 24 }
             + group.specificity * 1024 + path.split('/').count();
         quote! {
-            if [#(#methods),*].contains(&method) && #server::__private::match_route(&__http_decoded, #path).is_some() {
+            if [#(#methods),*].contains(&method) && #server::__private::match_route(path, #path).is_some() {
                 return Some(#priority);
             }
         }
@@ -196,6 +196,7 @@ fn expand_adapter(
         .map(|(id, group)| expand_dispatch(group, id, &server));
     let descriptors: Vec<_> = groups.iter().map(|group| {
         let path = &group.path;
+        let program = route_program(path, &server);
         let methods = group.endpoints.iter().fold(0u16, |bits, endpoint| bits | method_bit(endpoint.method));
         let priority = if path.split('/').any(|segment| segment.starts_with('*')) { 0 } else { 1 << 24 }
             + group.specificity * 1024 + path.split('/').count();
@@ -209,6 +210,7 @@ fn expand_adapter(
                         ::std::sync::LazyLock::new(|| #server::ApiMetrics::new([concat!(#path, "_2xx"), concat!(#path, "_3xx"), concat!(#path, "_4xx"), concat!(#path, "_5xx")]));
                     *METRICS
                 },
+                program: Some(#program),
             }
         }
     }).collect();
@@ -223,7 +225,7 @@ fn expand_adapter(
         } + group.specificity * 1024
             + path.split('/').count();
         quote! {
-            if #server::__private::match_route(&__http_decoded, #path).is_some() {
+            if #server::__private::match_route(path, #path).is_some() {
                 static METRICS: ::std::sync::LazyLock<#server::ApiMetrics> =
                     ::std::sync::LazyLock::new(|| #server::ApiMetrics::new([concat!(#path, "_2xx"), concat!(#path, "_3xx"), concat!(#path, "_4xx"), concat!(#path, "_5xx")]));
                 let candidate = (#priority, *METRICS);
@@ -234,9 +236,12 @@ fn expand_adapter(
     });
     let allowed_metadata = groups.iter().map(|group| {
         let path = &group.path;
-        let methods = group.endpoints.iter().fold(0, |bits, endpoint| bits | method_bit(endpoint.method));
+        let methods = group
+            .endpoints
+            .iter()
+            .fold(0, |bits, endpoint| bits | method_bit(endpoint.method));
         quote! {
-            if #server::__private::match_route(&__http_decoded, #path).is_some() { methods |= #methods; }
+            if #server::__private::match_route(path, #path).is_some() { methods |= #methods; }
         }
     });
     let principal = authentication_principal(&groups)?;
@@ -291,20 +296,17 @@ fn expand_adapter(
             }
 
             fn route_metrics(&self, path: &str, method: &str) -> Option<(usize, #server::ApiMetrics)> {
-                let __http_decoded = #server::__private::decode_path(path);
                 let mut fallback = None;
                 #(#metric_metadata)*
                 fallback
             }
 
             fn route_priority(&self, path: &str, method: &str) -> Option<usize> {
-                let __http_decoded = #server::__private::decode_path(path);
                 #(#route_metadata)*
                 None
             }
 
             fn route_methods(&self, path: &str) -> u16 {
-                let __http_decoded = #server::__private::decode_path(path);
                 let mut methods = 0;
                 #(#allowed_metadata)*
                 methods
@@ -317,8 +319,7 @@ fn expand_adapter(
             ) -> impl ::core::future::Future<Output = #server::Response> + Send + 'a {
                 async move {
                     let __http_method = __http_request.method();
-                    let __http_decoded_path = #server::__private::decode_path(__http_request.path());
-                    let __http_path = __http_decoded_path.as_ref();
+                    let __http_path = __http_request.path();
                     let __http_query = #server::__private::QueryParams::new(__http_request.query());
                     let mut __http_allow = 0;
                     #(#route_groups)*
@@ -327,6 +328,35 @@ fn expand_adapter(
             }
         }
     })
+}
+
+fn route_program(path: &str, server: &TokenStream2) -> TokenStream2 {
+    let segments = path.split('/').count();
+    let literals = path
+        .split('/')
+        .enumerate()
+        .filter(|(_, segment)| !segment.starts_with(':') && !segment.starts_with('*'))
+        .map(|(position, segment)| {
+            let literal = LitStr::new(segment, proc_macro2::Span::call_site());
+            quote! { (#position, #literal) }
+        });
+    let parameters = path
+        .split('/')
+        .enumerate()
+        .filter(|(_, segment)| segment.starts_with(':'))
+        .map(|(position, _)| position);
+    let catch_all = path
+        .split('/')
+        .position(|segment| segment.starts_with('*'))
+        .map_or_else(|| quote! { None }, |position| quote! { Some(#position) });
+    quote! {
+        #server::__private::RouteProgram {
+            segments: #segments,
+            literals: &[#(#literals),*],
+            parameters: &[#(#parameters),*],
+            catch_all: #catch_all,
+        }
+    }
 }
 
 fn route_attribute(attributes: &[Attribute]) -> Option<(&'static str, usize)> {

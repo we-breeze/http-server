@@ -68,6 +68,7 @@ impl Handler for IndexedOnly {
                     "/indexed/:id_5xx",
                 ])
             },
+            program: None,
         }];
         ROUTES
     }

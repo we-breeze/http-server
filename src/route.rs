@@ -1,3 +1,7 @@
+use std::borrow::Cow;
+
+use crate::params::decode_component;
+
 /// A no-allocation match result for a route template.
 #[derive(Clone, Copy, Debug)]
 pub struct RouteMatch<'a> {
@@ -6,15 +10,8 @@ pub struct RouteMatch<'a> {
 }
 
 impl<'a> RouteMatch<'a> {
-    pub(crate) fn from_ranges(path: &'a str, ranges: &[(usize, usize)]) -> Self {
-        let mut captures = [None; 8];
-        for (slot, &(start, end)) in captures.iter_mut().zip(ranges) {
-            *slot = Some(&path[start..end]);
-        }
-        Self {
-            captures,
-            len: ranges.len(),
-        }
+    pub(crate) fn from_captures(captures: [Option<&'a str>; 8], len: usize) -> Self {
+        Self { captures, len }
     }
 
     #[must_use]
@@ -23,21 +20,39 @@ impl<'a> RouteMatch<'a> {
     }
 }
 
-/// Matches a path against a static template containing literal and `:capture`
-/// segments. Templates are validated by the API macro and have at most eight
-/// captures.
+/// A compatibility match result which owns decoded path captures when needed.
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct DecodedRouteMatch<'a> {
+    captures: [Option<Cow<'a, str>>; 8],
+    len: usize,
+}
+
+impl DecodedRouteMatch<'_> {
+    #[must_use]
+    pub fn capture(&self, index: usize) -> Option<&str> {
+        (index < self.len)
+            .then(|| self.captures[index].as_deref())
+            .flatten()
+    }
+}
+
+/// Matches a raw path against a template containing literal, `:capture`, and
+/// terminal `*catch_all` segments. Raw `/` bytes establish segment boundaries;
+/// percent decoding is applied within each segment afterwards.
 #[doc(hidden)]
 #[must_use]
-pub fn match_route<'a>(path: &'a str, template: &str) -> Option<RouteMatch<'a>> {
-    let mut captures = [None; 8];
+pub fn match_route<'a>(path: &'a str, template: &str) -> Option<DecodedRouteMatch<'a>> {
+    let mut captures = std::array::from_fn(|_| None);
     let mut capture_len = 0;
+    let encoded = path.as_bytes().contains(&b'%');
     let mut path_segments = path.split('/');
     let mut template_segments = template.split('/');
     let mut path_offset = 0;
     loop {
         match (template_segments.next(), path_segments.next()) {
             (None, None) => {
-                return Some(RouteMatch {
+                return Some(DecodedRouteMatch {
                     captures,
                     len: capture_len,
                 });
@@ -51,8 +66,12 @@ pub fn match_route<'a>(path: &'a str, template: &str) -> Option<RouteMatch<'a>> 
                 } else {
                     ""
                 };
-                captures[capture_len] = Some(remainder);
-                return Some(RouteMatch {
+                captures[capture_len] = Some(if encoded {
+                    decode_component(remainder)
+                } else {
+                    Cow::Borrowed(remainder)
+                });
+                return Some(DecodedRouteMatch {
                     captures,
                     len: capture_len + 1,
                 });
@@ -61,14 +80,44 @@ pub fn match_route<'a>(path: &'a str, template: &str) -> Option<RouteMatch<'a>> 
                 if capture_len == captures.len() {
                     return None;
                 }
-                captures[capture_len] = Some(path);
+                captures[capture_len] = Some(if encoded {
+                    decode_component(path)
+                } else {
+                    Cow::Borrowed(path)
+                });
                 capture_len += 1;
                 path_offset += path.len() + 1;
             }
-            (Some(template), Some(path)) if template == path => {
+            (Some(template), Some(path))
+                if if encoded {
+                    decode_component(path) == template
+                } else {
+                    path == template
+                } =>
+            {
                 path_offset += path.len() + 1;
             }
             _ => return None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::match_route;
+
+    #[test]
+    fn raw_slashes_define_segments_before_component_decoding() {
+        let matched = match_route("/files/a%2Fb", "/files/:key").unwrap();
+        assert_eq!(matched.capture(0), Some("a/b"));
+        assert!(match_route("/files/a%2Fb", "/files/:parent/:name").is_none());
+        assert!(match_route("/files/a/b", "/files/:key").is_none());
+    }
+
+    #[test]
+    fn literals_and_captures_decode_once() {
+        assert!(match_route("/users/%E4%B8%AD", "/users/中").is_some());
+        let matched = match_route("/files/a%252Fb", "/files/:key").unwrap();
+        assert_eq!(matched.capture(0), Some("a%2Fb"));
     }
 }
