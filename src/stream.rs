@@ -19,7 +19,9 @@ pub struct ResponseStream {
 }
 
 impl ResponseStream {
-    fn new<S, E>(stream: S) -> Self
+    /// Wraps a byte stream with one-chunk read-ahead and drop cancellation.
+    #[must_use]
+    pub fn new<S, E>(stream: S) -> Self
     where
         S: Stream<Item = Result<Bytes, E>> + Send + 'static,
         E: std::fmt::Display + Send + 'static,
@@ -50,6 +52,14 @@ impl ResponseStream {
             start: Some(start),
             content_length: None,
         }
+    }
+
+    /// Declares the exact stream length so the server emits `Content-Length`
+    /// instead of chunked response framing.
+    #[must_use]
+    pub const fn with_content_length(mut self, content_length: u64) -> Self {
+        self.content_length = Some(content_length);
+        self
     }
 
     pub(crate) async fn next(&mut self) -> io::Result<Option<Bytes>> {
