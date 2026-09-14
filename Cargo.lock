@@ -51,7 +51,7 @@ dependencies = [
 
 [[package]]
 name = "brz-http-server"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "brz-ds",
  "brz-http-server-macros",
@@ -77,7 +77,7 @@ dependencies = [
 
 [[package]]
 name = "brz-http-server-macros"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -109,9 +109,9 @@ dependencies = [
 
 [[package]]
 name = "brz-metrics"
-version = "0.0.3"
+version = "0.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d60fda46393ee2c2bdee8394d10b6b075128a9dc0cf6cab0159ea76279eabea4"
+checksum = "1788265288ecfe57cfd485aedb2349c12b8d8b9a555f6da7c8b8051cc0539b7c"
 dependencies = [
  "ahash",
  "arc-swap",
