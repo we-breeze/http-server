@@ -1,4 +1,4 @@
-#![cfg(feature = "macros")]
+#![cfg(all(feature = "macros", feature = "metrics"))]
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -46,8 +46,11 @@ fn snapshots() -> BTreeMap<String, MetricSnapshot> {
     let mut metrics = BTreeMap::new();
     brz_metrics::visit(|name, kind, snapshot| {
         if name.starts_with("/metric-test/") {
-            assert_eq!(kind, "API");
-            metrics.insert(name.to_owned(), snapshot);
+            assert!(
+                matches!(kind, "API" | "API3XX" | "API4XX" | "API5XX" | "APITO"),
+                "unexpected API metric type {kind}",
+            );
+            metrics.insert(format!("{kind} {name}"), snapshot);
         }
     });
     metrics
@@ -78,16 +81,10 @@ async fn exported_routes_have_fixed_api_metrics_for_final_status_classes() {
         "/metric-test/invalid-json",
         "/metric-test/special",
     ];
-    let initial = snapshots();
-    assert_eq!(initial.len(), paths.len() * 4);
-    for path in paths {
-        for class in ["2xx", "3xx", "4xx", "5xx"] {
-            assert_eq!(initial[&format!("{path}_{class}")].total, 0);
-        }
-    }
-    // Repeated registration, including a shared path with two methods, deduplicates slots.
+    // Binding and explicit registration do not initialize metric slots.
+    assert!(snapshots().is_empty());
     brz_http_server::handlers!().unwrap().register_metrics();
-    assert_eq!(snapshots().len(), initial.len());
+    assert!(snapshots().is_empty());
 
     let address = server.local_addr().unwrap();
     let (tx, rx) = oneshot::channel();
@@ -117,24 +114,25 @@ async fn exported_routes_have_fixed_api_metrics_for_final_status_classes() {
     assert_eq!(send(address, "GET", "/unmatched-metric-test").await, 404);
 
     let metrics = snapshots();
-    assert_eq!(metrics.len(), initial.len());
-    for (class, count) in [("2xx", 4), ("3xx", 3), ("4xx", 4), ("5xx", 3)] {
-        let value = metrics[&format!("/metric-test/:code_{class}")];
-        assert_eq!(value.total, count, "{class}");
+    assert_eq!(metrics.len(), paths.len() * 5);
+    for (kind, count) in [("API", 4), ("API3XX", 3), ("API4XX", 4), ("API5XX", 3)] {
+        let value = metrics[&format!("{kind} /metric-test/:code")];
+        assert_eq!(value.total, count, "{kind}");
         assert_eq!(
             value.failure,
-            if class == "4xx" || class == "5xx" {
+            if kind == "API4XX" || kind == "API5XX" {
                 count
             } else {
                 0
-            }
+            },
         );
     }
-    assert_eq!(metrics["/metric-test/secure_4xx"].total, 1);
-    assert_eq!(metrics["/metric-test/slow_4xx"].total, 1);
-    assert_eq!(metrics["/metric-test/invalid-json_5xx"].total, 1);
-    assert_eq!(metrics["/metric-test/special_3xx"].total, 1);
-    assert_eq!(metrics["/metric-test/special_4xx"].total, 1);
+    assert_eq!(metrics["API4XX /metric-test/secure"].total, 1);
+    assert_eq!(metrics["API4XX /metric-test/slow"].total, 0);
+    assert_eq!(metrics["APITO /metric-test/slow"].total, 1);
+    assert_eq!(metrics["API5XX /metric-test/invalid-json"].total, 1);
+    assert_eq!(metrics["API3XX /metric-test/special"].total, 1);
+    assert_eq!(metrics["API4XX /metric-test/special"].total, 1);
     tx.send(()).unwrap();
     task.await.unwrap().unwrap();
 }

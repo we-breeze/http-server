@@ -60,14 +60,7 @@ impl Handler for IndexedOnly {
             path: "/indexed/:id",
             methods: 2,
             priority: 1 << 24,
-            metrics: || {
-                brz_http_server::ApiMetrics::new([
-                    "/indexed/:id_2xx",
-                    "/indexed/:id_3xx",
-                    "/indexed/:id_4xx",
-                    "/indexed/:id_5xx",
-                ])
-            },
+            metrics: || brz_http_server::ApiMetrics::new("/indexed/:id"),
             program: None,
         }];
         ROUTES
@@ -202,8 +195,8 @@ async fn resolves_once_and_dispatches_static_parameters_and_wildcards() {
     assert_eq!(prepared.load(Ordering::Relaxed), 12);
     assert_eq!(invoked.load(Ordering::Relaxed), 8);
     let mut recorded = false;
-    brz_metrics::visit(|name, _, snapshot| {
-        if name == "/users/:id_4xx" {
+    brz_metrics::visit(|name, kind, snapshot| {
+        if kind == "APITO" && name == "/users/:id" {
             recorded = snapshot.total >= 1;
         }
     });

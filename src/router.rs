@@ -89,10 +89,7 @@ impl<A: Authenticator> Handler<A> for Router<A> {
     }
 
     fn register_metrics(&self) {
-        let _ = self.index();
-        for handler in &self.handlers {
-            handler.register_metrics();
-        }
+        // Kept for source compatibility; metrics are initialized on route match.
     }
 
     fn route_metrics(&self, path: &str, method: &str) -> Option<(usize, ApiMetrics)> {
@@ -152,7 +149,6 @@ impl<A: Authenticator> Handler<A> for Router<A> {
 type ResponseFuture<'a> = Pin<Box<dyn Future<Output = Response> + Send + 'a>>;
 
 trait ErasedHandler<A: Authenticator>: Send + Sync {
-    fn register_metrics(&self);
     fn route_priority(&self, path: &str, method: &str) -> Option<usize>;
     fn route_metrics(&self, path: &str, method: &str) -> Option<(usize, ApiMetrics)>;
     fn route_methods(&self, path: &str) -> u16;
@@ -165,9 +161,6 @@ trait ErasedHandler<A: Authenticator>: Send + Sync {
 }
 
 impl<A: Authenticator, H: Handler<A>> ErasedHandler<A> for H {
-    fn register_metrics(&self) {
-        Handler::register_metrics(self);
-    }
     fn route_priority(&self, path: &str, method: &str) -> Option<usize> {
         Handler::route_priority(self, path, method)
     }

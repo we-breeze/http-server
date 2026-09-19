@@ -12,7 +12,7 @@ members = ["macros"]
 resolver = "3"
 
 [dependencies]
-brz-metrics = { package = "brz-metrics", version = "=0.0.5" }
+brz-metrics = { package = "brz-metrics", path = "/data0/icy/workspace/we-breeze/metrics", optional = true }
 brz-io = { package = "brz-io", version = "0.0.2" }
 brz-json = { package = "brz-json", version = "0.0.2" }
 brz-ds = { package = "brz-ds", version = "0.0.2", default-features = false }
@@ -39,8 +39,9 @@ tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-threa
 [features]
 default = []
 macros = ["dep:http-server-macros", "dep:inventory"]
-# Reserved flag for metrics configuration; collection is currently always enabled.
-metrics = []
+metrics = ["dep:brz-metrics"]
+api-log = []
+slow-log = []
 
 [lints.rust]
 unsafe_code = "forbid"
