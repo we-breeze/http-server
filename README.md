@@ -289,19 +289,19 @@ raw body access remains available after parsing, including on rejection paths.
 
 ## API metrics
 
-The `metrics` feature is currently a reserved configuration flag. Existing route
-metrics are collected regardless of this flag; conditional collection will be
-implemented separately.
+The `metrics` feature enables route metrics and the `brz-metrics` dependency.
+Without it, metric recording compiles out.
 
-Exported function routes automatically register four `brz-metrics` entries when
-binding the server. Profile output uses type `API` and names based on the full
-route template:
+Exported function routes lazily register five `brz-metrics` entries when the
+route first matches. The route template remains the metric name while the
+status class is represented by the metric type:
 
 ```text
-/users/:id_2xx
-/users/:id_3xx
-/users/:id_4xx
-/users/:id_5xx
+API    /users/:id
+API3XX /users/:id
+API4XX /users/:id
+API5XX /users/:id
+APITO  /users/:id
 ```
 
 Classes cover 200–299, 300–399, 400–499, and 500–599 inclusively. Different IDs
@@ -310,7 +310,8 @@ repeated server registrations also share them. Unused classes are registered
 with zero counts. There is no per-request metric-name allocation or registration
 after the route's metric handles have initialized.
 
-Counters record the final response status once, before socket writing. They
+The `APITO` row records the configured request timeout and is not also counted
+as `API4XX`. Other counters record the final response status once, before socket writing. They
 include authentication/extraction rejections, matched-path 405 responses,
 serialization failures, and body/handler timeouts after route identification.
 Latency spans route identification through response construction, with the
@@ -328,6 +329,30 @@ Call `Server::bind(address, handler)` or
 default limits and a server-owned arena with two 16 MiB chunks (32 MiB total).
 Use the corresponding `_with_config` / `_and_config` entrypoint when setting
 application policies such as CORS or validation error mapping.
+
+Defaults are a 15 second request timeout and an 8 MiB fixed-length request-body
+limit. At most 64 MiB of request bodies may be retained across concurrent
+handlers; set `ServerConfig::max_in_flight_request_body_bytes` when an upload
+workload needs a different aggregate budget. Enable `api-log` to emit body-free positional access lines containing
+method, raw target, status, millisecond latency, request length, and response
+length to `breeze.api`, and
+`slow-log` to emit requests taking at least 3 seconds, including a body excerpt
+capped at 2 KiB, to `breeze.slow`.
+
+The API line is positional and contains no key/value fields or body:
+
+```text
+2026-09-19 14:03:21 [API] GET /api/items?q=a 200 156ms 128 512
+```
+
+An unknown response length is written as `-`.
+
+Slow server lines use the positional form below. The request-body detail is
+always the final field:
+
+```text
+2026-09-19 14:03:24 [SLOW] http-server POST /api/items 200 3102ms 128 512 127.0.0.1:50000 false {"name":"demo"}
+```
 
 Use `ServerConfig::new(arena)` when explicitly sharing an arena with other
 Breeze SDKs. Each `EphemeralBytesArena`

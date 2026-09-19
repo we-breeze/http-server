@@ -17,14 +17,8 @@ struct Api {
 }
 
 fn metrics() -> ApiMetrics {
-    static METRICS: std::sync::LazyLock<ApiMetrics> = std::sync::LazyLock::new(|| {
-        ApiMetrics::new([
-            "/router-bench_2xx",
-            "/router-bench_3xx",
-            "/router-bench_4xx",
-            "/router-bench_5xx",
-        ])
-    });
+    static METRICS: std::sync::LazyLock<ApiMetrics> =
+        std::sync::LazyLock::new(|| ApiMetrics::new("/router-bench"));
     *METRICS
 }
 

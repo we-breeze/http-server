@@ -18,7 +18,6 @@ use crate::{
 mod write;
 use write::write_response;
 
-const INITIAL_READ_BUFFER_CAPACITY: usize = 4 * 1024;
 const MAX_REQUEST_HEADERS: usize = 64;
 const DEFAULT_ARENA_CHUNK_CAPACITY: usize = 16 * 1024 * 1024;
 
@@ -33,7 +32,7 @@ pub trait Handler<A = NoAuthenticator>: Send + Sync + 'static
 where
     A: Authenticator,
 {
-    /// Register fixed metrics for exported routes at server startup.
+    /// Retained for source compatibility. Route metrics initialize lazily.
     #[doc(hidden)]
     fn register_metrics(&self) {}
 
@@ -123,6 +122,10 @@ pub struct ServerConfig {
     pub max_request_head_bytes: usize,
     /// Maximum fixed Content-Length request body.
     pub max_request_body_bytes: usize,
+    /// Maximum aggregate bytes retained for request bodies currently being
+    /// handled. This prevents many valid, large requests from multiplying the
+    /// process memory footprint up to `max_connections * max_request_body_bytes`.
+    pub max_in_flight_request_body_bytes: usize,
     /// Maximum time for request read and handler invocation, or an inactive
     /// response write. Streaming downloads reset this timeout after each chunk.
     pub request_timeout: Duration,
@@ -147,10 +150,11 @@ impl ServerConfig {
             arena,
             cors: None,
             rejection_handler: crate::rejection::default_rejection,
-            max_connections: 1024,
+            max_connections: 65_536,
             max_request_head_bytes: 32 * 1024,
-            max_request_body_bytes: 1024 * 1024,
-            request_timeout: Duration::from_secs(30),
+            max_request_body_bytes: 8 * 1024 * 1024,
+            max_in_flight_request_body_bytes: 64 * 1024 * 1024,
+            request_timeout: Duration::from_secs(15),
             shutdown_grace: Duration::from_secs(10),
             tcp_nodelay: true,
         }
@@ -173,6 +177,16 @@ impl ServerConfig {
         if self.max_request_body_bytes == 0 {
             return Err(Error::InvalidConfig(
                 "max_request_body_bytes must be greater than zero",
+            ));
+        }
+        if self.max_in_flight_request_body_bytes < self.max_request_body_bytes {
+            return Err(Error::InvalidConfig(
+                "max_in_flight_request_body_bytes must be at least max_request_body_bytes",
+            ));
+        }
+        if u32::try_from(self.max_request_body_bytes).is_err() {
+            return Err(Error::InvalidConfig(
+                "max_request_body_bytes must not exceed u32::MAX",
             ));
         }
         if self.request_timeout.is_zero() {
@@ -296,6 +310,7 @@ where
             config,
         } = self;
         let connection_limit = Arc::new(Semaphore::new(config.max_connections));
+        let request_body_limit = Arc::new(Semaphore::new(config.max_in_flight_request_body_bytes));
         let mut connections = JoinSet::new();
         tokio::pin!(shutdown);
 
@@ -315,6 +330,7 @@ where
                     }
                     let handler = Arc::clone(&handler);
                     let authenticator = Arc::clone(&authenticator);
+                    let request_body_limit = Arc::clone(&request_body_limit);
                     let config = config.clone();
                     connections.spawn(async move {
                         let _permit = permit;
@@ -323,6 +339,7 @@ where
                             peer_addr,
                             handler,
                             authenticator,
+                            request_body_limit,
                             config,
                         )
                         .await
@@ -368,7 +385,6 @@ where
 {
     config.validate()?;
     let listener = TcpListener::bind(address).await?;
-    handler.register_metrics();
     Ok(Server {
         listener,
         handler: Arc::new(handler),
@@ -382,13 +398,17 @@ async fn serve_connection<H, A>(
     peer_addr: SocketAddr,
     handler: Arc<H>,
     authenticator: Arc<A>,
+    request_body_limit: Arc<Semaphore>,
     config: ServerConfig,
 ) -> std::io::Result<()>
 where
     H: Handler<A>,
     A: Authenticator,
 {
-    let mut read_buffer = BytesMut::with_capacity(INITIAL_READ_BUFFER_CAPACITY);
+    // Allocate only once the peer sends a request. At the 65,536 connection
+    // limit, eagerly reserving 4 KiB per idle keep-alive connection would
+    // consume roughly 256 MiB before processing any application traffic.
+    let mut read_buffer = BytesMut::new();
     loop {
         let mut observation = crate::api_metrics::Observation::new();
         let result = tokio::time::timeout(
@@ -399,7 +419,10 @@ where
                 peer_addr,
                 handler.as_ref(),
                 authenticator.as_ref(),
-                &config,
+                RequestLimits {
+                    config: &config,
+                    body_limit: &request_body_limit,
+                },
                 &mut observation,
             ),
         )
@@ -410,7 +433,7 @@ where
             Ok(Err(RequestFailure::Closed)) => return Ok(()),
             Ok(Err(failure)) => {
                 let response = Response::empty(failure.status()).close();
-                observation.record(response.status());
+                observation.record(response.status(), response.body().content_length(), false);
                 write_response(
                     &mut stream,
                     &config.arena,
@@ -423,7 +446,7 @@ where
             }
             Err(_) => {
                 let response = Response::empty(StatusCode::REQUEST_TIMEOUT).close();
-                observation.record(response.status());
+                observation.record(response.status(), response.body().content_length(), true);
                 write_response(
                     &mut stream,
                     &config.arena,
@@ -436,7 +459,7 @@ where
             }
         };
 
-        observation.record(response.status());
+        observation.record(response.status(), response.body().content_length(), false);
         let close = !request_keep_alive || response.should_close();
         write_response(
             &mut stream,
@@ -453,19 +476,25 @@ where
     }
 }
 
+struct RequestLimits<'a> {
+    config: &'a ServerConfig,
+    body_limit: &'a Arc<Semaphore>,
+}
+
 async fn receive_and_handle<H, A>(
     stream: &mut TcpStream,
     read_buffer: &mut BytesMut,
     peer_addr: SocketAddr,
     handler: &H,
     authenticator: &A,
-    config: &ServerConfig,
+    limits: RequestLimits<'_>,
     observation: &mut crate::api_metrics::Observation,
 ) -> std::result::Result<(Response, usize, bool), RequestFailure>
 where
     H: Handler<A>,
     A: Authenticator,
 {
+    let config = limits.config;
     let inspection = loop {
         match inspect_request(read_buffer, config)? {
             Some(inspection) => break inspection,
@@ -488,6 +517,17 @@ where
     let path = target.split_once('?').map_or(target, |(path, _)| path);
     let prepared = handler.prepare(path, method);
     observation.matched(prepared.metrics());
+    observation.request_head(
+        method,
+        target,
+        peer_addr,
+        inspection.total_len - inspection.head_len,
+    );
+
+    let body_len = inspection.total_len - inspection.head_len;
+    // The permit is retained through handler completion. Responses cannot borrow
+    // a request body, so releasing it before socket writing is safe.
+    let _body_permit = reserve_request_body(limits.body_limit, body_len).await?;
 
     // Keep any pipelined bytes in the header buffer; read exactly this body's
     // remaining Content-Length into arena segments without growing that buffer.
@@ -529,6 +569,7 @@ where
         &config.arena,
     );
     request.rejection_handler = config.rejection_handler;
+    observation.request(&request);
     let cors_origin = request.header("origin");
     let preflight = config
         .cors
@@ -558,6 +599,20 @@ where
         ));
     }
     Ok((response, consumed, inspection.keep_alive))
+}
+
+async fn reserve_request_body(
+    body_limit: &Arc<Semaphore>,
+    body_len: usize,
+) -> std::result::Result<Option<tokio::sync::OwnedSemaphorePermit>, RequestFailure> {
+    if body_len == 0 {
+        return Ok(None);
+    }
+    Arc::clone(body_limit)
+        .acquire_many_owned(u32::try_from(body_len).expect("validated request body size"))
+        .await
+        .map(Some)
+        .map_err(|_| RequestFailure::ServiceUnavailable)
 }
 
 fn inspect_request(
@@ -657,6 +712,7 @@ enum RequestFailure {
     ExpectationFailed,
     UnsupportedTransferEncoding,
     UnsupportedVersion,
+    ServiceUnavailable,
     Closed,
     Io(std::io::Error),
 }
@@ -669,6 +725,7 @@ impl RequestFailure {
             Self::ExpectationFailed => StatusCode::EXPECTATION_FAILED,
             Self::UnsupportedTransferEncoding => StatusCode::NOT_IMPLEMENTED,
             Self::UnsupportedVersion => StatusCode::HTTP_VERSION_NOT_SUPPORTED,
+            Self::ServiceUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             Self::BadRequest | Self::Closed | Self::Io(_) => StatusCode::BAD_REQUEST,
         }
     }
@@ -687,6 +744,9 @@ impl std::fmt::Display for RequestFailure {
                 formatter.write_str("HTTP transfer encoding is unsupported")
             }
             Self::UnsupportedVersion => formatter.write_str("HTTP version is unsupported"),
+            Self::ServiceUnavailable => {
+                formatter.write_str("HTTP request body capacity is unavailable")
+            }
             Self::Closed => formatter.write_str("peer closed connection"),
             Self::Io(error) => error.fmt(formatter),
         }

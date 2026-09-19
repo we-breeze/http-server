@@ -84,7 +84,7 @@ impl<'p> PreparedRoute<'p> {
         encoded: bool,
     ) -> bool {
         self.allowed |= entry.methods;
-        let metric = Some((entry.priority, entry.metrics));
+        let metric = Some((entry.priority, (entry.metrics)()));
         if self
             .metric
             .is_none_or(|(priority, _)| entry.priority > priority)
@@ -203,7 +203,7 @@ struct Entry {
     endpoint: usize,
     methods: u16,
     priority: usize,
-    metrics: ApiMetrics,
+    metrics: fn() -> ApiMetrics,
     segments: usize,
     literals: Vec<(usize, &'static str)>,
     parameters: Vec<usize>,
@@ -246,7 +246,7 @@ impl Entry {
             endpoint: route.endpoint,
             methods: descriptor.methods,
             priority: descriptor.priority,
-            metrics: (descriptor.metrics)(),
+            metrics: descriptor.metrics,
             segments,
             literals,
             parameters,
@@ -638,12 +638,7 @@ mod tests {
     use crate::route::match_route;
 
     fn metrics() -> ApiMetrics {
-        ApiMetrics::new([
-            "/index-test_2xx",
-            "/index-test_3xx",
-            "/index-test_4xx",
-            "/index-test_5xx",
-        ])
+        ApiMetrics::new("/index-test")
     }
 
     fn registration(handler: usize, path: &'static str, methods: u16) -> RegisteredRoute {

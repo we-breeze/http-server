@@ -62,6 +62,15 @@ async fn read_to_close(stream: &mut TcpStream) -> Vec<u8> {
     output
 }
 
+#[test]
+fn default_limits_match_runtime_contract() {
+    let config = ServerConfig::default();
+    assert_eq!(config.max_connections, 65_536);
+    assert_eq!(config.max_request_body_bytes, 8 * 1024 * 1024);
+    assert_eq!(config.max_in_flight_request_body_bytes, 64 * 1024 * 1024);
+    assert_eq!(config.request_timeout, std::time::Duration::from_secs(15));
+}
+
 #[tokio::test]
 async fn borrowed_request_and_arena_body_support_keep_alive_and_pipelining() {
     let response_used_arena = Arc::new(AtomicBool::new(false));
@@ -178,6 +187,33 @@ async fn bind_rejects_invalid_limits() {
     assert_eq!(
         error.to_string(),
         "invalid server configuration: max_connections must be greater than zero"
+    );
+}
+
+#[tokio::test]
+async fn bind_rejects_body_capacity_smaller_than_one_request() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    let arena = EphemeralBytesArena::new(128);
+    let mut config = ServerConfig::new(arena);
+    config.max_request_body_bytes = 1024;
+    config.max_in_flight_request_body_bytes = 1023;
+
+    let result = Server::bind_with_config(
+        address,
+        Echo {
+            response_used_arena: Arc::new(AtomicBool::new(false)),
+        },
+        config,
+    )
+    .await;
+    let Err(error) = result else {
+        panic!("body capacity smaller than one request must fail validation");
+    };
+    assert_eq!(
+        error.to_string(),
+        "invalid server configuration: max_in_flight_request_body_bytes must be at least max_request_body_bytes"
     );
 }
 

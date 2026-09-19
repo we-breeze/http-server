@@ -194,27 +194,36 @@ fn expand_adapter(
         .iter()
         .enumerate()
         .map(|(id, group)| expand_dispatch(group, id, &server));
-    let descriptors: Vec<_> = groups.iter().map(|group| {
-        let path = &group.path;
-        let program = route_program(path, &server);
-        let methods = group.endpoints.iter().fold(0u16, |bits, endpoint| bits | method_bit(endpoint.method));
-        let priority = if path.split('/').any(|segment| segment.starts_with('*')) { 0 } else { 1 << 24 }
-            + group.specificity * 1024 + path.split('/').count();
-        quote! {
-            #server::__private::RouteDescriptor {
-                path: #path,
-                methods: #methods,
-                priority: #priority,
-                metrics: || {
-                    static METRICS: ::std::sync::LazyLock<#server::ApiMetrics> =
-                        ::std::sync::LazyLock::new(|| #server::ApiMetrics::new([concat!(#path, "_2xx"), concat!(#path, "_3xx"), concat!(#path, "_4xx"), concat!(#path, "_5xx")]));
-                    *METRICS
-                },
-                program: Some(#program),
+    let descriptors: Vec<_> = groups
+        .iter()
+        .map(|group| {
+            let path = &group.path;
+            let program = route_program(path, &server);
+            let methods = group
+                .endpoints
+                .iter()
+                .fold(0u16, |bits, endpoint| bits | method_bit(endpoint.method));
+            let priority = if path.split('/').any(|segment| segment.starts_with('*')) {
+                0
+            } else {
+                1 << 24
+            } + group.specificity * 1024
+                + path.split('/').count();
+            quote! {
+                #server::__private::RouteDescriptor {
+                    path: #path,
+                    methods: #methods,
+                    priority: #priority,
+                    metrics: || {
+                        static METRICS: ::std::sync::LazyLock<#server::ApiMetrics> =
+                            ::std::sync::LazyLock::new(|| #server::ApiMetrics::new(#path));
+                        *METRICS
+                    },
+                    program: Some(#program),
+                }
             }
-        }
-    }).collect();
-    let metric_paths = groups.iter().map(|group| &group.path);
+        })
+        .collect();
     let metric_metadata = groups.iter().map(|group| {
         let path = &group.path;
         let methods = group.endpoints.iter().map(|endpoint| endpoint.method);
@@ -227,7 +236,7 @@ fn expand_adapter(
         quote! {
             if #server::__private::match_route(path, #path).is_some() {
                 static METRICS: ::std::sync::LazyLock<#server::ApiMetrics> =
-                    ::std::sync::LazyLock::new(|| #server::ApiMetrics::new([concat!(#path, "_2xx"), concat!(#path, "_3xx"), concat!(#path, "_4xx"), concat!(#path, "_5xx")]));
+                    ::std::sync::LazyLock::new(|| #server::ApiMetrics::new(#path));
                 let candidate = (#priority, *METRICS);
                 if [#(#methods),*].contains(&method) { return Some(candidate); }
                 if fallback.is_none() { fallback = Some(candidate); }
@@ -292,7 +301,7 @@ fn expand_adapter(
             }
 
             fn register_metrics(&self) {
-                #(let _ = #server::ApiMetrics::new([concat!(#metric_paths, "_2xx"), concat!(#metric_paths, "_3xx"), concat!(#metric_paths, "_4xx"), concat!(#metric_paths, "_5xx")]);)*
+                // Handles are initialized by the route's LazyLock on first use.
             }
 
             fn route_metrics(&self, path: &str, method: &str) -> Option<(usize, #server::ApiMetrics)> {
