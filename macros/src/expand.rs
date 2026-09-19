@@ -2,7 +2,7 @@ use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
-use syn::{Attribute, FnArg, Ident, ItemFn, LitStr, Pat, ReturnType, Token, Type};
+use syn::{Attribute, FnArg, Ident, ItemFn, LitBool, LitStr, Pat, ReturnType, Token, Type};
 
 mod function;
 mod generate;
@@ -56,6 +56,7 @@ struct RouteArguments {
     consumes: Option<Codec>,
     produces: Option<Codec>,
     auth: Option<AuthMode>,
+    api_log: bool,
     group: Option<syn::Path>,
 }
 
@@ -65,6 +66,7 @@ impl Parse for RouteArguments {
         let mut consumes = None;
         let mut produces = None;
         let mut auth = None;
+        let mut api_log = true;
         let mut group = None;
         while !input.is_empty() {
             input.parse::<Token![,]>()?;
@@ -85,12 +87,14 @@ impl Parse for RouteArguments {
                 produces = Some(input.parse()?);
             } else if name == "auth" {
                 auth = Some(input.parse()?);
+            } else if name == "api_log" {
+                api_log = input.parse::<LitBool>()?.value;
             } else if name == "group" && group.is_none() {
                 group = Some(crate::registry::group_path(input.parse()?));
             } else {
                 return Err(syn::Error::new_spanned(
                     name,
-                    "supported route options are consumes, produces, auth, and group (once)",
+                    "supported route options are consumes, produces, auth, api_log, and group (once)",
                 ));
             }
         }
@@ -99,6 +103,7 @@ impl Parse for RouteArguments {
             consumes,
             produces,
             auth,
+            api_log,
             group,
         })
     }
@@ -112,6 +117,7 @@ struct Endpoint {
     result: ResultKind,
     has_json_body: bool,
     auth: AuthMode,
+    api_log: bool,
 }
 
 struct Parameter {
@@ -203,6 +209,11 @@ fn expand_adapter(
                 .endpoints
                 .iter()
                 .fold(0u16, |bits, endpoint| bits | method_bit(endpoint.method));
+            let api_log_methods = group
+                .endpoints
+                .iter()
+                .filter(|endpoint| endpoint.api_log)
+                .fold(0u16, |bits, endpoint| bits | method_bit(endpoint.method));
             let priority = if path.split('/').any(|segment| segment.starts_with('*')) {
                 0
             } else {
@@ -213,6 +224,7 @@ fn expand_adapter(
                 #server::__private::RouteDescriptor {
                     path: #path,
                     methods: #methods,
+                    api_log_methods: #api_log_methods,
                     priority: #priority,
                     metrics: || {
                         static METRICS: ::std::sync::LazyLock<#server::ApiMetrics> =
@@ -565,6 +577,7 @@ fn parse_endpoint(
         parameters,
         result,
         auth,
+        api_log: route.api_log,
     })
 }
 

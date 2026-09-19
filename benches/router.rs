@@ -33,6 +33,7 @@ impl Api {
         .map(|(index, path)| RouteDescriptor {
             path: Box::leak(path.into_boxed_str()),
             methods: 2,
+            api_log_methods: 2,
             priority: (1 << 24) + (4 - index) * 1024 + 4,
             metrics,
             program: None,
@@ -48,6 +49,7 @@ impl Api {
         let routes = Box::leak(Box::new([RouteDescriptor {
             path: Box::leak(path.into_boxed_str()),
             methods: 2,
+            api_log_methods: 2,
             priority: (1 << 24) + 3 * 1024 + 4,
             metrics,
             program: None,

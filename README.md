@@ -339,6 +339,10 @@ length to `breeze.api`, and
 `slow-log` to emit requests taking at least 3 seconds, including a body excerpt
 capped at 2 KiB, to `breeze.slow`.
 
+An exported route may opt out of `api.log` while retaining metrics and slow
+request logging with `api_log = false`, for example
+`#[get("/health", api_log = false)]`.
+
 The API line is positional and contains no key/value fields or body:
 
 ```text
