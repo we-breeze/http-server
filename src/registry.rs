@@ -151,6 +151,7 @@ mod tests {
         RouteDescriptor {
             path,
             methods,
+            api_log_methods: methods,
             priority,
             metrics,
             program: None,

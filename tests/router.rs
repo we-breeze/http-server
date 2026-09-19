@@ -59,6 +59,7 @@ impl Handler for IndexedOnly {
         const ROUTES: &[RouteDescriptor] = &[RouteDescriptor {
             path: "/indexed/:id",
             methods: 2,
+            api_log_methods: 2,
             priority: 1 << 24,
             metrics: || brz_http_server::ApiMetrics::new("/indexed/:id"),
             program: None,

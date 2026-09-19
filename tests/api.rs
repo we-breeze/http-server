@@ -82,7 +82,7 @@ async fn optional(auth: Option<Authenticated<Actor>>) -> OptionalAuthView {
     }
 }
 
-#[brz_http_server::get("/private/health", auth = none, group = protected)]
+#[brz_http_server::get("/private/health", auth = none, api_log = false, group = protected)]
 async fn health() -> HealthView {
     std::future::ready(()).await;
     HealthView { ok: true }

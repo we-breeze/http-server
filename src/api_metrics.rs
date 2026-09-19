@@ -70,6 +70,7 @@ struct RequestLog {
 
 pub(crate) struct Observation {
     metrics: Option<ApiMetrics>,
+    api_log: bool,
     started: Instant,
     #[cfg(any(feature = "api-log", feature = "slow-log"))]
     request: Option<RequestLog>,
@@ -79,6 +80,7 @@ impl Observation {
     pub(crate) fn new() -> Self {
         Self {
             metrics: None,
+            api_log: true,
             started: Instant::now(),
             #[cfg(any(feature = "api-log", feature = "slow-log"))]
             request: None,
@@ -88,6 +90,10 @@ impl Observation {
     pub(crate) fn matched(&mut self, metrics: Option<ApiMetrics>) {
         self.metrics = metrics;
         self.started = Instant::now();
+    }
+
+    pub(crate) fn set_api_log(&mut self, enabled: bool) {
+        self.api_log = enabled;
     }
 
     pub(crate) fn request_head(
@@ -145,7 +151,9 @@ impl Observation {
             }
         }
         #[cfg(feature = "api-log")]
-        if let Some(request) = &self.request {
+        if self.api_log
+            && let Some(request) = &self.request
+        {
             tracing::info!(
                 target: "breeze.api",
                 "{} {} {} {}ms {} {}",

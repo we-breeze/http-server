@@ -13,6 +13,7 @@ const INLINE_SEGMENTS: usize = 32;
 pub struct RouteDescriptor {
     pub path: &'static str,
     pub methods: u16,
+    pub api_log_methods: u16,
     pub priority: usize,
     pub metrics: fn() -> ApiMetrics,
     /// Macro-generated segment program. Handwritten descriptors may leave this
@@ -51,6 +52,7 @@ pub struct PreparedRoute<'p> {
     pub(super) metric: Option<(usize, ApiMetrics)>,
     metric_owner: usize,
     pub(super) allowed: u16,
+    api_log: bool,
     captures: CaptureValues<'p>,
 }
 
@@ -62,6 +64,7 @@ impl<'p> PreparedRoute<'p> {
             metric,
             metric_owner: usize::MAX,
             allowed: 0,
+            api_log: true,
             captures: CaptureValues::default(),
         }
     }
@@ -69,6 +72,11 @@ impl<'p> PreparedRoute<'p> {
     #[must_use]
     pub fn metrics(&self) -> Option<ApiMetrics> {
         self.metric.map(|(_, metric)| metric)
+    }
+
+    #[must_use]
+    pub fn api_log(&self) -> bool {
+        self.api_log
     }
 
     pub(super) fn captures(&self) -> RouteMatch<'_> {
@@ -100,6 +108,7 @@ impl<'p> PreparedRoute<'p> {
             endpoint: Some(entry.endpoint),
             priority: entry.priority,
         });
+        self.api_log = entry.api_log_methods & method != 0;
         self.metric = metric;
         self.metric_owner = entry.handler;
         self.captures = CaptureValues::from_ranges(self.path, &ranges, encoded);
@@ -202,6 +211,7 @@ struct Entry {
     handler: usize,
     endpoint: usize,
     methods: u16,
+    api_log_methods: u16,
     priority: usize,
     metrics: fn() -> ApiMetrics,
     segments: usize,
@@ -245,6 +255,7 @@ impl Entry {
             handler: route.handler,
             endpoint: route.endpoint,
             methods: descriptor.methods,
+            api_log_methods: descriptor.api_log_methods,
             priority: descriptor.priority,
             metrics: descriptor.metrics,
             segments,
@@ -655,6 +666,7 @@ mod tests {
             descriptor: RouteDescriptor {
                 path,
                 methods,
+                api_log_methods: methods,
                 priority,
                 metrics,
                 program: None,

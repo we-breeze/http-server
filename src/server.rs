@@ -517,6 +517,7 @@ where
     let path = target.split_once('?').map_or(target, |(path, _)| path);
     let prepared = handler.prepare(path, method);
     observation.matched(prepared.metrics());
+    observation.set_api_log(prepared.api_log());
     observation.request_head(
         method,
         target,
