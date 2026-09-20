@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use brz_http_server::{
-    ApiError, ApiResult, AuthFailure, AuthRequest, Authenticated, Authenticator,
-    EphemeralBytesArena, Handler, Server, ServerConfig, StatusCode,
+    ApiError, ApiResult, AuthFailure, AuthRequest, Authenticator, EphemeralBytesArena, Handler,
+    Server, ServerConfig, StatusCode,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -35,9 +35,7 @@ struct Actor {
 
 struct HeaderAuthenticator;
 
-impl Authenticator for HeaderAuthenticator {
-    type Principal = Actor;
-
+impl Authenticator<Actor> for HeaderAuthenticator {
     // Keep fixtures on the same async trait API as real handlers.
     #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn authenticate<'a>(&'a self, request: AuthRequest<'a>) -> Result<Actor, AuthFailure> {
@@ -45,6 +43,25 @@ impl Authenticator for HeaderAuthenticator {
             None => Err(AuthFailure::missing_credentials("Bearer")),
             Some(b"Bearer test-token") => Ok(Actor { id: 9 }),
             Some(_) => Err(AuthFailure::invalid_credentials("Bearer")),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ServiceActor {
+    name: &'static str,
+}
+
+impl Authenticator<ServiceActor> for HeaderAuthenticator {
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
+    async fn authenticate<'a>(
+        &'a self,
+        request: AuthRequest<'a>,
+    ) -> Result<ServiceActor, AuthFailure> {
+        match request.header("x-service-token") {
+            None => Err(AuthFailure::missing_credentials("Service")),
+            Some(b"service-token") => Ok(ServiceActor { name: "quota" }),
+            Some(_) => Err(AuthFailure::invalid_credentials("Service")),
         }
     }
 }
@@ -61,28 +78,38 @@ struct OptionalAuthView {
 }
 
 #[derive(Serialize)]
+struct ServiceView {
+    name: &'static str,
+}
+
+#[derive(Serialize)]
 struct HealthView {
     ok: bool,
 }
 
-#[brz_http_server::get("/private/:id", group = protected, auth = required)]
-async fn get_private(id: u64, auth: Authenticated<Actor>) -> PrivateView {
+#[brz_http_server::get("/private/:id", group = protected)]
+async fn get_private(id: u64, #[auth] actor: Actor) -> PrivateView {
     std::future::ready(()).await;
     PrivateView {
         id,
-        actor_id: auth.principal().id,
+        actor_id: actor.id,
     }
 }
 
-#[brz_http_server::get("/private/optional", auth = optional, group = protected)]
-async fn optional(auth: Option<Authenticated<Actor>>) -> OptionalAuthView {
+#[brz_http_server::get("/private/optional", group = protected)]
+async fn optional(#[auth] actor: Option<Actor>) -> OptionalAuthView {
     std::future::ready(()).await;
     OptionalAuthView {
-        authenticated: auth.is_some(),
+        authenticated: actor.is_some(),
     }
 }
 
-#[brz_http_server::get("/private/health", auth = none, api_log = false, group = protected)]
+#[brz_http_server::get("/private/service", group = protected)]
+async fn service(#[auth] service: ServiceActor) -> ServiceView {
+    ServiceView { name: service.name }
+}
+
+#[brz_http_server::get("/private/health", api_log = false, group = protected)]
 async fn health() -> HealthView {
     std::future::ready(()).await;
     HealthView { ok: true }
@@ -131,7 +158,7 @@ async fn update<'a>(
 fn start_server<H, A>(server: Server<H, A>) -> (oneshot::Sender<()>, tokio::task::JoinHandle<()>)
 where
     H: Handler<A>,
-    A: Authenticator,
+    A: Send + Sync + 'static,
 {
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let task = tokio::spawn(async move {
@@ -312,6 +339,16 @@ async fn custom_authenticator_injects_or_rejects_a_typed_principal() {
     assert_eq!(
         invalid_optional,
         b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Bearer\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+
+    let service = request(
+        address,
+        b"GET /private/service HTTP/1.1\r\nHost: localhost\r\nX-Service-Token: service-token\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert_eq!(
+        service,
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 16\r\nConnection: close\r\n\r\n{\"name\":\"quota\"}"
     );
 
     let public = request(

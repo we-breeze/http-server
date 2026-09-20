@@ -1,11 +1,11 @@
 use std::fmt;
 
+use crate::Router;
 use crate::router::RouteDescriptor;
-use crate::{Authenticator, Router};
 
 /// The typed registration emitted by function API macros for a handler collection.
 #[doc(hidden)]
-pub struct ApiRegistration<S, A: Authenticator> {
+pub struct ApiRegistration<S, A: Send + Sync + 'static> {
     pub name: &'static str,
     pub routes: fn() -> &'static [RouteDescriptor],
     pub build: fn(&S) -> Router<A>,
@@ -50,7 +50,7 @@ impl std::error::Error for RegistryError {}
 
 /// Validates a collection and constructs its flat router in API-name order.
 #[doc(hidden)]
-pub fn collect<S, A: Authenticator>(
+pub fn collect<S, A: Send + Sync + 'static>(
     state: &S,
     registrations: &[ApiRegistration<S, A>],
 ) -> Result<Router<A>, RegistryError> {

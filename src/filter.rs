@@ -1,4 +1,4 @@
-use crate::{ApiMetrics, Authenticator, Handler, NoAuthenticator, Request, Response, Router};
+use crate::{ApiMetrics, Handler, NoAuthenticator, Request, Response, Router};
 
 /// Decision returned by [`HttpFilter::before`].
 #[derive(Debug)]
@@ -61,7 +61,7 @@ impl<H, F> Filtered<H, F> {
 /// Extension methods for decorating a handler with generic HTTP filters.
 pub trait HandlerExt<A = NoAuthenticator>: Handler<A> + Sized
 where
-    A: Authenticator,
+    A: Send + Sync + 'static,
 {
     #[must_use]
     fn with_filter<F>(self, filter: F) -> Filtered<Self, F>
@@ -75,7 +75,7 @@ where
 impl<H, A> HandlerExt<A> for H
 where
     H: Handler<A>,
-    A: Authenticator,
+    A: Send + Sync + 'static,
 {
 }
 
@@ -83,7 +83,7 @@ impl<H, F, A> Handler<A> for Filtered<H, F>
 where
     H: Handler<A>,
     F: HttpFilter,
-    A: Authenticator,
+    A: Send + Sync + 'static,
 {
     fn register_metrics(&self) {
         self.inner.register_metrics();

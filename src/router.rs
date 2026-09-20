@@ -4,8 +4,7 @@ use std::sync::OnceLock;
 
 use crate::route::RouteMatch;
 use crate::{
-    ApiMetrics, Authenticator, Handler, IntoHttpResponse, NoAuthenticator, Request, Response,
-    StatusCode,
+    ApiMetrics, Handler, IntoHttpResponse, NoAuthenticator, Request, Response, StatusCode,
 };
 
 mod index;
@@ -17,14 +16,14 @@ use index::{RegisteredRoute, RouteIndex};
 /// Routes are indexed once before serving. Static paths use byte-length buckets;
 /// parameter paths use segment-count and final-literal buckets. Only the selected
 /// handler's future is boxed. Each API retains its own application state.
-pub struct Router<A: Authenticator = NoAuthenticator> {
+pub struct Router<A: Send + Sync + 'static = NoAuthenticator> {
     handlers: Vec<Box<dyn ErasedHandler<A>>>,
     routes: Vec<RegisteredRoute>,
     legacy: Vec<usize>,
     index: OnceLock<RouteIndex>,
 }
 
-impl<A: Authenticator> Default for Router<A> {
+impl<A: Send + Sync + 'static> Default for Router<A> {
     fn default() -> Self {
         Self {
             handlers: Vec::new(),
@@ -35,7 +34,7 @@ impl<A: Authenticator> Default for Router<A> {
     }
 }
 
-impl<A: Authenticator> Router<A> {
+impl<A: Send + Sync + 'static> Router<A> {
     #[must_use]
     pub fn new<H: Handler<A>>(handler: H) -> Self {
         Self::default().merge(handler)
@@ -72,7 +71,7 @@ impl<A: Authenticator> Router<A> {
     }
 }
 
-impl<A: Authenticator> Handler<A> for Router<A> {
+impl<A: Send + Sync + 'static> Handler<A> for Router<A> {
     fn append_to(mut self, router: &mut Self) {
         router.index.take();
         let offset = router.handlers.len();
@@ -148,7 +147,7 @@ impl<A: Authenticator> Handler<A> for Router<A> {
 
 type ResponseFuture<'a> = Pin<Box<dyn Future<Output = Response> + Send + 'a>>;
 
-trait ErasedHandler<A: Authenticator>: Send + Sync {
+trait ErasedHandler<A: Send + Sync + 'static>: Send + Sync {
     fn route_priority(&self, path: &str, method: &str) -> Option<usize>;
     fn route_metrics(&self, path: &str, method: &str) -> Option<(usize, ApiMetrics)>;
     fn route_methods(&self, path: &str) -> u16;
@@ -160,7 +159,7 @@ trait ErasedHandler<A: Authenticator>: Send + Sync {
     ) -> ResponseFuture<'a>;
 }
 
-impl<A: Authenticator, H: Handler<A>> ErasedHandler<A> for H {
+impl<A: Send + Sync + 'static, H: Handler<A>> ErasedHandler<A> for H {
     fn route_priority(&self, path: &str, method: &str) -> Option<usize> {
         Handler::route_priority(self, path, method)
     }

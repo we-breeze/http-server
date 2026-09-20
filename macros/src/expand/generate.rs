@@ -1,6 +1,6 @@
 use super::{
-    AuthMode, Endpoint, LitStr, Parameter, ParameterSource, ResultKind, RouteGroup, TokenStream2,
-    method_bit, quote,
+    Endpoint, LitStr, Parameter, ParameterSource, ResultKind, RouteGroup, TokenStream2, method_bit,
+    option_inner, quote,
 };
 
 pub(super) fn expand_group(group: &RouteGroup, server: &TokenStream2) -> TokenStream2 {
@@ -76,14 +76,13 @@ fn expand_authentication(endpoint: &Endpoint, server: &TokenStream2) -> TokenStr
     let authentication_parameter = endpoint
         .parameters
         .iter()
-        .find(|parameter| matches!(parameter.source, ParameterSource::Authenticated));
+        .find(|parameter| matches!(parameter.source, ParameterSource::Auth));
     let request = quote! {
         #server::AuthRequest::from_request(&__http_request)
     };
-    match (endpoint.auth, authentication_parameter) {
-        (AuthMode::None, None) => quote! {},
-        (AuthMode::None, Some(_)) => unreachable!("auth parameters are validated during parsing"),
-        (AuthMode::Required, Some(parameter)) => {
+    match authentication_parameter {
+        None => quote! {},
+        Some(parameter) if option_inner(&parameter.ty).is_none() => {
             let ident = &parameter.binding;
             let ty = &parameter.ty;
             quote! {
@@ -99,7 +98,7 @@ fn expand_authentication(endpoint: &Endpoint, server: &TokenStream2) -> TokenStr
                 };
             }
         }
-        (AuthMode::Optional, Some(parameter)) => {
+        Some(parameter) => {
             let ident = &parameter.binding;
             let ty = &parameter.ty;
             quote! {
@@ -115,28 +114,6 @@ fn expand_authentication(endpoint: &Endpoint, server: &TokenStream2) -> TokenStr
                 };
             }
         }
-        (AuthMode::Required, None) => quote! {
-            if let Err(response) = #server::__private::authenticate_required(
-                __http_authenticator,
-                #request,
-                __http_request.response_arena(),
-            )
-            .await
-            {
-                return response;
-            }
-        },
-        (AuthMode::Optional, None) => quote! {
-            if let Err(response) = #server::__private::authenticate_optional(
-                __http_authenticator,
-                #request,
-                __http_request.response_arena(),
-            )
-            .await
-            {
-                return response;
-            }
-        },
     }
 }
 
@@ -242,7 +219,7 @@ fn expand_parameter(parameter: &Parameter, server: &TokenStream2) -> TokenStream
                 Err(error) => { #failure }
             };
         },
-        ParameterSource::Authenticated => quote! {},
+        ParameterSource::Auth => quote! {},
         _ => expand_body_parameter(parameter, server, &failure),
     }
 }

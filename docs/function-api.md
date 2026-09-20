@@ -2,7 +2,7 @@
 
 Enable the `macros` and `metrics` features. Define one async free function per route and use
 ordinary Rust modules to organize related endpoints. Each function declares its
-full path, authentication policy, HTTP inputs, injected dependencies, and output.
+full path, HTTP inputs, authentication, injected dependencies, and output.
 `#[api] impl` and `FromState` are no longer supported.
 
 The `metrics` flag is reserved for future conditional collection. Existing route
@@ -50,17 +50,18 @@ clones that dependency using the `Clone` trait on each invocation. `&mut T` is n
 supported: shared mutable services should expose their own synchronization.
 There is no automatic matching by parameter name or type and no runtime lookup.
 
-Injected and header parameters can appear anywhere without occupying a path-capture position.
+Injected, authenticated, and header parameters can appear anywhere without occupying a path-capture position.
 Among the remaining parameters, path captures bind first in route order and must
 have the capture names. Scalars then bind query keys; one business struct binds
 the body. `#[header]` reads a header with the parameter's name (without a raw
 identifier's `r#` prefix); `#[header("x-api-key")]` specifies its name explicitly.
 Underscores remain underscores. `Option<T>` permits a missing header; `T` requires
 one. Repeated annotations and conflicting parameter sources are compile errors.
-The route-level `headers(...)` syntax is no longer supported.
-`Authenticated<T>` is supplied by the authentication layer. A parameter cannot
-bind both a dependency and a path capture or header. Functions remain directly
-callable with ordinary Rust arguments, including borrowed inputs and outputs.
+The route-level `headers(...)` syntax is no longer supported. `#[auth] principal: T`
+requires authentication and injects an owned principal; `#[auth] principal: Option<T>`
+permits missing credentials but rejects invalid credentials. A parameter can use
+only one input source. Functions remain directly callable with ordinary Rust
+arguments, including borrowed inputs and outputs.
 Raw `/` bytes establish path segment boundaries before capture decoding, so an
 encoded `%2F` remains inside one capture and is delivered to the function as `/`.
 
@@ -93,8 +94,8 @@ Keep using the logical name in route attributes and `handlers!`; for a qualified
 path, only the final group segment is mapped to the generated module.
 `registry!(group = admin, auth = AdminAuth, dependencies(...))` fixes that group's
 authenticator type; use `Server::bind_with_authenticator` to supply its instance.
-Set `auth = required` or `auth = optional` on each protected function. The default
-is `auth = none`; modules do not implicitly change authentication or route paths.
+Declare `#[auth]` on each protected function. Functions without an `#[auth]`
+parameter are public; modules do not implicitly change authentication or route paths.
 `consumes` and `produces` default to `json`; `protobuf` is reserved.
 
 `handlers!` returns `Result<Router<A>, RegistryError>` and rejects conflicting

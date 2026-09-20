@@ -70,9 +70,11 @@ fn expand(
     let expanded = expand_adapter(&registry, &input, &route, method, &adapter, &alias)?;
     for argument in &mut input.sig.inputs {
         if let FnArg::Typed(argument) = argument {
-            argument
-                .attrs
-                .retain(|attr| !attr.path().is_ident("inject") && !attr.path().is_ident("header"));
+            argument.attrs.retain(|attr| {
+                !attr.path().is_ident("auth")
+                    && !attr.path().is_ident("inject")
+                    && !attr.path().is_ident("header")
+            });
         }
     }
     let cfg = input
@@ -162,6 +164,27 @@ pub(super) fn header(argument: &PatType, ident: &Ident) -> syn::Result<Option<Li
         name = Some(value);
     }
     Ok(name)
+}
+
+pub(super) fn authentication(argument: &PatType) -> syn::Result<bool> {
+    let mut found = false;
+    for attr in argument
+        .attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("auth"))
+    {
+        if found {
+            return Err(syn::Error::new_spanned(
+                attr,
+                "specify exactly one #[auth] per parameter",
+            ));
+        }
+        if !matches!(attr.meta, syn::Meta::Path(_)) {
+            return Err(syn::Error::new_spanned(attr, "expected #[auth]"));
+        }
+        found = true;
+    }
+    Ok(found)
 }
 
 pub(super) fn injection(argument: &PatType) -> syn::Result<Option<Ident>> {
@@ -273,7 +296,7 @@ mod tests {
                     ) {
                     }
                 ),
-                "cannot also bind",
+                "only one of",
             ),
             (
                 quote!("/:id"),
@@ -283,11 +306,16 @@ mod tests {
                 "cannot also bind a path capture",
             ),
             (
-                quote!("/", auth = required),
+                quote!("/"),
                 quote!(
-                    async fn read(#[header] user: Authenticated<User>) {}
+                    async fn read(
+                        #[auth]
+                        #[header]
+                        user: User,
+                    ) {
+                    }
                 ),
-                "Authenticated<T> is injected by auth",
+                "only one of",
             ),
             (
                 quote!("/", headers(value = "other")),
@@ -346,7 +374,54 @@ mod tests {
                     ) {
                     }
                 ),
-                "cannot also bind",
+                "only one of",
+            ),
+            (
+                quote!("/"),
+                quote!(
+                    async fn read(#[auth(required)] user: User) {}
+                ),
+                "expected #[auth]",
+            ),
+            (
+                quote!("/"),
+                quote!(
+                    async fn read(
+                        #[auth]
+                        #[auth]
+                        user: User,
+                    ) {
+                    }
+                ),
+                "exactly one #[auth]",
+            ),
+            (
+                quote!("/"),
+                quote!(
+                    async fn read(#[auth] user: &User) {}
+                ),
+                "must be owned",
+            ),
+            (
+                quote!("/"),
+                quote!(
+                    async fn read(#[auth] user: Option<&User>) {}
+                ),
+                "must be owned",
+            ),
+            (
+                quote!("/:user"),
+                quote!(
+                    async fn read(#[auth] user: User) {}
+                ),
+                "cannot also bind a path capture",
+            ),
+            (
+                quote!("/", auth = required),
+                quote!(
+                    async fn read() {}
+                ),
+                "declare authentication with #[auth]",
             ),
             (
                 quote!("/"),

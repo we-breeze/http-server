@@ -1,5 +1,5 @@
 // Pre-change Router, retained only as a routing benchmark baseline.
-use brz_http_server::{Authenticator, Handler, IntoHttpResponse, Request, Response, StatusCode};
+use brz_http_server::{Handler, IntoHttpResponse, Request, Response, StatusCode};
 
 /// Statically composes macro-exported API groups on one listener.
 pub struct Router<L, R = EmptyRoutes> {
@@ -27,7 +27,7 @@ impl<L, R> Router<L, R> {
     }
 }
 
-impl<A: Authenticator, L: Handler<A>, R: Handler<A>> Handler<A> for Router<L, R> {
+impl<A: Send + Sync + 'static, L: Handler<A>, R: Handler<A>> Handler<A> for Router<L, R> {
     fn register_metrics(&self) {
         self.left.register_metrics();
         self.right.register_metrics();
@@ -85,7 +85,7 @@ impl<A: Authenticator, L: Handler<A>, R: Handler<A>> Handler<A> for Router<L, R>
 #[doc(hidden)]
 pub struct EmptyRoutes;
 
-impl<A: Authenticator> Handler<A> for EmptyRoutes {
+impl<A: Send + Sync + 'static> Handler<A> for EmptyRoutes {
     // Keep fixtures on the same async trait API as real handlers.
     #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn call(&self, _request: Request<'_>, _authenticator: &A) -> Response {

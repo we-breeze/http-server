@@ -20,8 +20,8 @@ async fn create(code: u16) -> Response {
     Response::empty(StatusCode::from_u16(code).unwrap())
 }
 
-#[brz_http_server::get("/metric-test/secure", auth = required)]
-async fn secure() -> StatusCode {
+#[brz_http_server::get("/metric-test/secure")]
+async fn secure(#[auth] _principal: ()) -> StatusCode {
     StatusCode::OK
 }
 

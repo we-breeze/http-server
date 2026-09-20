@@ -61,15 +61,15 @@ impl<'a> AuthRequest<'a> {
 ///
 /// The implementation returns an owned principal. It must not retain a
 /// borrowed header or other [`AuthRequest`] data after its future completes.
-pub trait Authenticator: Send + Sync + 'static {
-    /// Application-defined identity available to protected API methods.
-    type Principal: Send + Sync + 'static;
-
+pub trait Authenticator<P>: Send + Sync + 'static
+where
+    P: Send + Sync + 'static,
+{
     /// Authenticates one request.
     fn authenticate<'a>(
         &'a self,
         request: AuthRequest<'a>,
-    ) -> impl Future<Output = std::result::Result<Self::Principal, AuthFailure>> + Send + 'a;
+    ) -> impl Future<Output = std::result::Result<P, AuthFailure>> + Send + 'a;
 
     /// Maps authentication failures to the application's HTTP error contract.
     fn reject(
@@ -79,28 +79,6 @@ pub trait Authenticator: Send + Sync + 'static {
         _arena: &EphemeralBytesArena,
     ) -> Response {
         failure.into_response()
-    }
-}
-
-/// The identity produced by a successful [`Authenticator`].
-///
-/// `Authenticated<T>` is injected by function API macros for a route declared with
-/// `auth = required` or `auth = optional`. Its field is private so normal
-/// business code consumes authentication context rather than constructing it.
-#[derive(Debug)]
-pub struct Authenticated<T>(T);
-
-impl<T> Authenticated<T> {
-    /// Borrows the authenticated principal.
-    #[must_use]
-    pub fn principal(&self) -> &T {
-        &self.0
-    }
-
-    /// Consumes the authentication wrapper and returns its principal.
-    #[must_use]
-    pub fn into_principal(self) -> T {
-        self.0
     }
 }
 
@@ -145,19 +123,19 @@ impl AuthFailure {
 
 /// Default authenticator used by [`crate::Server::bind`].
 ///
-/// API routes without an `auth` option never invoke it. A route that requires
-/// authentication under this server consistently returns `401`.
+/// Public API routes never invoke it. A route with an `#[auth]` parameter under
+/// this server consistently returns `401`.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoAuthenticator;
 
-impl Authenticator for NoAuthenticator {
-    type Principal = ();
-
+impl<P> Authenticator<P> for NoAuthenticator
+where
+    P: Send + Sync + 'static,
+{
     fn authenticate<'a>(
         &'a self,
         _request: AuthRequest<'a>,
-    ) -> impl std::future::Future<Output = std::result::Result<Self::Principal, AuthFailure>> + Send
-    {
+    ) -> impl std::future::Future<Output = std::result::Result<P, AuthFailure>> + Send {
         std::future::ready(Err(AuthFailure::missing_credentials("Bearer")))
     }
 }
@@ -165,35 +143,40 @@ impl Authenticator for NoAuthenticator {
 // Keep the owned response inline to avoid a separate error-path allocation.
 #[allow(clippy::result_large_err)]
 #[doc(hidden)]
-pub async fn authenticate_required<A>(
+pub async fn authenticate_required<A, P>(
     authenticator: &A,
     request: AuthRequest<'_>,
     arena: &EphemeralBytesArena,
-) -> std::result::Result<Authenticated<A::Principal>, Response>
+) -> std::result::Result<P, Response>
 where
-    A: Authenticator,
+    A: Authenticator<P>,
+    P: Send + Sync + 'static,
 {
-    authenticator
-        .authenticate(request)
+    <A as Authenticator<P>>::authenticate(authenticator, request)
         .await
-        .map(Authenticated)
-        .map_err(|failure| authenticator.reject(request, failure, arena))
+        .map_err(|failure| <A as Authenticator<P>>::reject(authenticator, request, failure, arena))
 }
 
 // Keep the owned response inline to avoid a separate error-path allocation.
 #[allow(clippy::result_large_err)]
 #[doc(hidden)]
-pub async fn authenticate_optional<A>(
+pub async fn authenticate_optional<A, P>(
     authenticator: &A,
     request: AuthRequest<'_>,
     arena: &EphemeralBytesArena,
-) -> std::result::Result<Option<Authenticated<A::Principal>>, Response>
+) -> std::result::Result<Option<P>, Response>
 where
-    A: Authenticator,
+    A: Authenticator<P>,
+    P: Send + Sync + 'static,
 {
-    match authenticator.authenticate(request).await {
-        Ok(principal) => Ok(Some(Authenticated(principal))),
+    match <A as Authenticator<P>>::authenticate(authenticator, request).await {
+        Ok(principal) => Ok(Some(principal)),
         Err(AuthFailure::MissingCredentials { .. }) => Ok(None),
-        Err(error) => Err(authenticator.reject(request, error, arena)),
+        Err(error) => Err(<A as Authenticator<P>>::reject(
+            authenticator,
+            request,
+            error,
+            arena,
+        )),
     }
 }

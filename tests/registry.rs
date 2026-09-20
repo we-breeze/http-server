@@ -1,8 +1,6 @@
 #![cfg(feature = "macros")]
 
-use brz_http_server::{
-    AuthFailure, AuthRequest, Authenticated, Authenticator, Handler, Server, Text,
-};
+use brz_http_server::{AuthFailure, AuthRequest, Authenticator, Handler, Server, Text};
 use std::net::SocketAddr;
 use std::sync::{
     Arc,
@@ -96,8 +94,7 @@ mod alternates {
 
 struct TokenAuth;
 struct Principal(&'static str);
-impl Authenticator for TokenAuth {
-    type Principal = Principal;
+impl Authenticator<Principal> for TokenAuth {
     #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn authenticate(&self, request: AuthRequest<'_>) -> Result<Principal, AuthFailure> {
         match request.header("authorization") {
@@ -108,9 +105,9 @@ impl Authenticator for TokenAuth {
     }
 }
 
-#[brz_http_server::get("/fixture/vault/:slot", group = authenticated_apis, auth = required)]
-async fn vault(slot: u32, #[inject(label)] label: &str, actor: Authenticated<Principal>) -> Text {
-    Text(format!("{label}:{}:{slot}", actor.principal().0))
+#[brz_http_server::get("/fixture/vault/:slot", group = authenticated_apis)]
+async fn vault(slot: u32, #[inject(label)] label: &str, #[auth] actor: Principal) -> Text {
+    Text(format!("{label}:{}:{slot}", actor.0))
 }
 
 macro_rules! stateless_api {

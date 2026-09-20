@@ -15,28 +15,6 @@ enum Codec {
     Protobuf,
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum AuthMode {
-    None,
-    Optional,
-    Required,
-}
-
-impl Parse for AuthMode {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let value: Ident = input.parse()?;
-        match value.to_string().as_str() {
-            "none" => Ok(Self::None),
-            "optional" => Ok(Self::Optional),
-            "required" => Ok(Self::Required),
-            _ => Err(syn::Error::new_spanned(
-                value,
-                "supported auth modes are none, optional, and required",
-            )),
-        }
-    }
-}
-
 impl Parse for Codec {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let value: Ident = input.parse()?;
@@ -55,7 +33,6 @@ struct RouteArguments {
     path: LitStr,
     consumes: Option<Codec>,
     produces: Option<Codec>,
-    auth: Option<AuthMode>,
     api_log: bool,
     group: Option<syn::Path>,
 }
@@ -65,7 +42,6 @@ impl Parse for RouteArguments {
         let path = input.parse()?;
         let mut consumes = None;
         let mut produces = None;
-        let mut auth = None;
         let mut api_log = true;
         let mut group = None;
         while !input.is_empty() {
@@ -85,8 +61,6 @@ impl Parse for RouteArguments {
                 consumes = Some(input.parse()?);
             } else if name == "produces" {
                 produces = Some(input.parse()?);
-            } else if name == "auth" {
-                auth = Some(input.parse()?);
             } else if name == "api_log" {
                 api_log = input.parse::<LitBool>()?.value;
             } else if name == "group" && group.is_none() {
@@ -94,7 +68,7 @@ impl Parse for RouteArguments {
             } else {
                 return Err(syn::Error::new_spanned(
                     name,
-                    "supported route options are consumes, produces, auth, api_log, and group (once)",
+                    "supported route options are consumes, produces, api_log, and group (once); declare authentication with #[auth] on a parameter",
                 ));
             }
         }
@@ -102,7 +76,6 @@ impl Parse for RouteArguments {
             path,
             consumes,
             produces,
-            auth,
             api_log,
             group,
         })
@@ -116,7 +89,6 @@ struct Endpoint {
     parameters: Vec<Parameter>,
     result: ResultKind,
     has_json_body: bool,
-    auth: AuthMode,
     api_log: bool,
 }
 
@@ -138,7 +110,7 @@ enum ParameterSource {
         name: LitStr,
         optional_inner: Option<Type>,
     },
-    Authenticated,
+    Auth,
     JsonBody,
     QueryObject,
     QueryMany(Type),
@@ -171,7 +143,7 @@ fn expand_adapter(
             "protobuf API codecs are declared but not implemented yet; use json",
         ));
     }
-    let mut endpoint = parse_endpoint(method, input, route, route.auth.unwrap_or(AuthMode::None))?;
+    let mut endpoint = parse_endpoint(method, input, route)?;
     endpoint.handler = callable.clone();
     let groups = [RouteGroup {
         specificity: endpoint
@@ -273,13 +245,13 @@ fn expand_adapter(
         .predicates
         .push(syn::parse_quote!(#self_ty: Send + Sync + 'static));
     if let Some(principal) = principal {
-        bounds.predicates.push(
-            syn::parse_quote!(__HttpAuthenticator: #server::Authenticator<Principal = #principal>),
-        );
+        bounds
+            .predicates
+            .push(syn::parse_quote!(__HttpAuthenticator: #server::Authenticator<#principal>));
     } else {
         bounds
             .predicates
-            .push(syn::parse_quote!(__HttpAuthenticator: #server::Authenticator));
+            .push(syn::parse_quote!(__HttpAuthenticator: Send + Sync + 'static));
     }
     let (impl_generics, _, where_clause) = generics.split_for_impl();
     let handler_impl = quote! { impl #impl_generics #server::Handler<__HttpAuthenticator> for #self_ty #where_clause };
@@ -405,7 +377,6 @@ fn parse_endpoint(
     method: &'static str,
     function: &ItemFn,
     route: &RouteArguments,
-    auth: AuthMode,
 ) -> syn::Result<Endpoint> {
     if function.sig.asyncness.is_none() {
         return Err(syn::Error::new_spanned(
@@ -448,19 +419,27 @@ fn parse_endpoint(
         syn::visit_mut::VisitMut::visit_type_mut(&mut BindingLifetimes, &mut ty);
         let dependency = function::injection(argument)?;
         let header = function::header(argument, &pattern.ident)?;
-        if header.is_some() && dependency.is_some() {
+        let auth = function::authentication(argument)?;
+        let sources =
+            usize::from(dependency.is_some()) + usize::from(header.is_some()) + usize::from(auth);
+        if sources > 1 {
             return Err(syn::Error::new_spanned(
                 argument,
-                "an injected dependency cannot also bind a header",
+                "a parameter must use only one of #[auth], #[header], or #[inject]",
             ));
         }
-        if header.is_some() && authenticated_inner(&ty).is_some() {
-            return Err(syn::Error::new_spanned(
-                argument,
-                "Authenticated<T> is injected by auth, not #[header]",
-            ));
+        if auth {
+            let principal = option_inner(&ty).unwrap_or_else(|| ty.clone());
+            if matches!(principal, Type::Reference(_)) {
+                return Err(syn::Error::new_spanned(
+                    &ty,
+                    "an #[auth] principal must be owned; references cannot outlive request authentication",
+                ));
+            }
         }
-        let source = if let Some(name) = header {
+        let source = if auth {
+            ParameterSource::Auth
+        } else if let Some(name) = header {
             ParameterSource::Header {
                 name,
                 optional_inner: option_inner(&ty),
@@ -481,12 +460,12 @@ fn parse_endpoint(
     for parameter in &parameters {
         if matches!(
             parameter.source,
-            ParameterSource::Header { .. } | ParameterSource::Injected(_)
+            ParameterSource::Auth | ParameterSource::Header { .. } | ParameterSource::Injected(_)
         ) && captures.iter().any(|name| parameter.ident == name.as_str())
         {
             return Err(syn::Error::new_spanned(
                 &parameter.ident,
-                "a header or injected parameter cannot also bind a path capture",
+                "an auth, header, or injected parameter cannot also bind a path capture",
             ));
         }
     }
@@ -495,7 +474,9 @@ fn parse_endpoint(
         .filter(|parameter| {
             !matches!(
                 parameter.source,
-                ParameterSource::Injected(_) | ParameterSource::Header { .. }
+                ParameterSource::Auth
+                    | ParameterSource::Injected(_)
+                    | ParameterSource::Header { .. }
             )
         })
         .collect();
@@ -518,6 +499,18 @@ fn parse_endpoint(
     let mut body_index = None;
     let mut authentication_parameter = None;
     for parameter in &mut parameters {
+        if matches!(parameter.source, ParameterSource::Auth) {
+            if authentication_parameter
+                .replace(parameter.ident.clone())
+                .is_some()
+            {
+                return Err(syn::Error::new_spanned(
+                    &parameter.ident,
+                    "an HTTP API method may have at most one #[auth] parameter",
+                ));
+            }
+            continue;
+        }
         if matches!(
             parameter.source,
             ParameterSource::Injected(_)
@@ -526,18 +519,7 @@ fn parse_endpoint(
         ) {
             continue;
         }
-        if authenticated_inner(&parameter.ty).is_some() {
-            if authentication_parameter
-                .replace(parameter.ident.clone())
-                .is_some()
-            {
-                return Err(syn::Error::new_spanned(
-                    &parameter.ident,
-                    "an HTTP API method may have at most one Authenticated<T> parameter",
-                ));
-            }
-            parameter.source = ParameterSource::Authenticated;
-        } else if type_name(&parameter.ty) == Some("Query") {
+        if type_name(&parameter.ty) == Some("Query") {
             parameter.source = ParameterSource::QueryObject;
         } else if let Some(inner) = generic_inner(&parameter.ty, "Vec") {
             parameter.source = ParameterSource::QueryMany(inner);
@@ -565,7 +547,6 @@ fn parse_endpoint(
             };
         }
     }
-    validate_auth_parameters(auth, &parameters, authentication_parameter.as_ref())?;
     let result = result_kind(&function.sig.output)?;
     Ok(Endpoint {
         method,
@@ -576,43 +557,8 @@ fn parse_endpoint(
             .any(|parameter| matches!(parameter.source, ParameterSource::JsonBody)),
         parameters,
         result,
-        auth,
         api_log: route.api_log,
     })
-}
-
-fn validate_auth_parameters(
-    auth: AuthMode,
-    parameters: &[Parameter],
-    authentication_parameter: Option<&Ident>,
-) -> syn::Result<()> {
-    let Some(parameter) = parameters
-        .iter()
-        .find(|parameter| matches!(parameter.source, ParameterSource::Authenticated))
-    else {
-        return Ok(());
-    };
-    let Some((_, optional)) = authenticated_inner(&parameter.ty) else {
-        unreachable!("authenticated parameter source has an authenticated type");
-    };
-    match auth {
-        AuthMode::None => Err(syn::Error::new_spanned(
-            &parameter.ty,
-            "Authenticated<T> requires auth = required or auth = optional",
-        )),
-        AuthMode::Required if optional => Err(syn::Error::new_spanned(
-            &parameter.ty,
-            "auth = required injects Authenticated<T>, not Option<Authenticated<T>>",
-        )),
-        AuthMode::Optional if !optional => Err(syn::Error::new_spanned(
-            &parameter.ty,
-            "auth = optional injects Option<Authenticated<T>>",
-        )),
-        AuthMode::Required | AuthMode::Optional => {
-            debug_assert_eq!(authentication_parameter, Some(&parameter.ident));
-            Ok(())
-        }
-    }
 }
 
 fn authentication_principal(groups: &[RouteGroup]) -> syn::Result<Option<Type>> {
@@ -620,12 +566,10 @@ fn authentication_principal(groups: &[RouteGroup]) -> syn::Result<Option<Type>> 
     let mut principal_key = None;
     for endpoint in groups.iter().flat_map(|group| &group.endpoints) {
         for parameter in &endpoint.parameters {
-            if !matches!(parameter.source, ParameterSource::Authenticated) {
+            if !matches!(parameter.source, ParameterSource::Auth) {
                 continue;
             }
-            let Some((candidate, _)) = authenticated_inner(&parameter.ty) else {
-                unreachable!("authenticated parameter source has an authenticated type");
-            };
+            let candidate = option_inner(&parameter.ty).unwrap_or_else(|| parameter.ty.clone());
             let candidate_key = quote!(#candidate).to_string();
             if let Some(existing) = &principal_key
                 && existing != &candidate_key
@@ -682,29 +626,6 @@ fn option_inner(ty: &Type) -> Option<Type> {
         syn::GenericArgument::Type(inner) => Some(inner.clone()),
         _ => None,
     }
-}
-
-fn authenticated_inner(ty: &Type) -> Option<(Type, bool)> {
-    if let Some(inner) = option_inner(ty) {
-        let (principal, false) = authenticated_inner(&inner)? else {
-            return None;
-        };
-        return Some((principal, true));
-    }
-    let Type::Path(path) = ty else {
-        return None;
-    };
-    let segment = path.path.segments.last()?;
-    if segment.ident != "Authenticated" {
-        return None;
-    }
-    let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
-        return None;
-    };
-    let syn::GenericArgument::Type(principal) = arguments.args.first()? else {
-        return None;
-    };
-    Some((principal.clone(), false))
 }
 
 fn is_scalar(ty: &Type) -> bool {
