@@ -11,8 +11,7 @@ use tokio::task::JoinSet;
 use tracing::{debug, warn};
 
 use crate::{
-    Authenticator, EphemeralBytesArena, Error, Header, NoAuthenticator, Request, Response, Result,
-    StatusCode,
+    EphemeralBytesArena, Error, Header, NoAuthenticator, Request, Response, Result, StatusCode,
 };
 
 mod write;
@@ -30,7 +29,7 @@ const DEFAULT_ARENA_CHUNK_CAPACITY: usize = 16 * 1024 * 1024;
 /// completes, so its body can be written without a second framework copy.
 pub trait Handler<A = NoAuthenticator>: Send + Sync + 'static
 where
-    A: Authenticator,
+    A: Send + Sync + 'static,
 {
     /// Retained for source compatibility. Route metrics initialize lazily.
     #[doc(hidden)]
@@ -241,13 +240,13 @@ where
 impl<H, A> Server<H, A>
 where
     H: Handler<A>,
-    A: Authenticator,
+    A: Send + Sync + 'static,
 {
     /// Binds an address with an application-defined request authenticator.
     ///
-    /// API routes declared with `auth = required` or `auth = optional` invoke
-    /// this authenticator after static route matching and before body decoding.
-    /// Routes without an auth option do not invoke it.
+    /// API routes with an `#[auth]` parameter invoke this authenticator after
+    /// static route matching and before body decoding. Other routes do not
+    /// invoke it.
     ///
     /// # Errors
     ///
@@ -381,7 +380,7 @@ async fn bind_server<H, A>(
 ) -> Result<Server<H, A>>
 where
     H: Handler<A>,
-    A: Authenticator,
+    A: Send + Sync + 'static,
 {
     config.validate()?;
     let listener = TcpListener::bind(address).await?;
@@ -403,7 +402,7 @@ async fn serve_connection<H, A>(
 ) -> std::io::Result<()>
 where
     H: Handler<A>,
-    A: Authenticator,
+    A: Send + Sync + 'static,
 {
     // Allocate only once the peer sends a request. At the 65,536 connection
     // limit, eagerly reserving 4 KiB per idle keep-alive connection would
@@ -492,7 +491,7 @@ async fn receive_and_handle<H, A>(
 ) -> std::result::Result<(Response, usize, bool), RequestFailure>
 where
     H: Handler<A>,
-    A: Authenticator,
+    A: Send + Sync + 'static,
 {
     let config = limits.config;
     let inspection = loop {

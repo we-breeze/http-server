@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use brz_http_server::__private::{PreparedRoute, RouteDescriptor, RouteMatch};
 use brz_http_server::{
-    AuthFailure, AuthRequest, Authenticated, Authenticator, Handler, IntoHttpResponse,
-    NoAuthenticator, Request, Response, Router, Server, ServerConfig, Text,
+    AuthFailure, AuthRequest, Authenticator, Handler, IntoHttpResponse, NoAuthenticator, Request,
+    Response, Router, Server, ServerConfig, Text,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -211,17 +211,15 @@ async fn resolves_once_and_dispatches_static_parameters_and_wildcards() {
 
 struct Principal;
 struct Auth;
-impl Authenticator for Auth {
-    type Principal = Principal;
+impl Authenticator<Principal> for Auth {
     // Keep fixtures on the same async trait API as real handlers.
     #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn authenticate(&self, _: AuthRequest<'_>) -> Result<Principal, AuthFailure> {
         Ok(Principal)
     }
 }
-#[brz_http_server::get("/private", group = private, auth = required)]
-async fn private(#[inject(value)] value: &str, actor: Authenticated<Principal>) -> Text {
-    let _ = actor.principal();
+#[brz_http_server::get("/private", group = private)]
+async fn private(#[inject(value)] value: &str, #[auth] _actor: Principal) -> Text {
     Text(value.into())
 }
 

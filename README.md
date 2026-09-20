@@ -75,7 +75,7 @@ let handler = handler.with_filter(Maintenance);
 
 Enable the `macros` and `metrics` features. Define one async free function per route and use
 ordinary Rust modules to organize related endpoints. Each function declares its
-full path, authentication policy, HTTP inputs, injected dependencies, and output.
+full path, HTTP inputs, authentication, injected dependencies, and output.
 `#[api] impl` and `FromState` are no longer supported.
 
 Declare dependency names and types once for each listener group:
@@ -120,17 +120,18 @@ clones that dependency using the `Clone` trait on each invocation. `&mut T` is n
 supported: shared mutable services should expose their own synchronization.
 There is no automatic matching by parameter name or type and no runtime lookup.
 
-Injected and header parameters can appear anywhere without occupying a path-capture position.
+Injected, authenticated, and header parameters can appear anywhere without occupying a path-capture position.
 Among the remaining parameters, path captures bind first in route order and must
 have the capture names. Scalars then bind query keys; one business struct binds
 the body. `#[header]` reads a header with the parameter's name (without a raw
 identifier's `r#` prefix); `#[header("x-api-key")]` specifies its name explicitly.
 Underscores remain underscores. `Option<T>` permits a missing header; `T` requires
 one. Repeated annotations and conflicting parameter sources are compile errors.
-The route-level `headers(...)` syntax is no longer supported.
-`Authenticated<T>` is supplied by the authentication layer. A parameter cannot
-bind both a dependency and a path capture or header. Functions remain directly
-callable with ordinary Rust arguments, including borrowed inputs and outputs.
+The route-level `headers(...)` syntax is no longer supported. `#[auth] principal: T`
+requires authentication and injects an owned principal; `#[auth] principal: Option<T>`
+permits missing credentials but rejects invalid credentials. A parameter can use
+only one input source. Functions remain directly callable with ordinary Rust
+arguments, including borrowed inputs and outputs.
 
 For a dependency-free group, use `registry!()` and `handlers!()`.
 Modules enroll their functions through normal `mod` inclusion, with no filesystem
@@ -161,8 +162,8 @@ Keep using the logical name in route attributes and `handlers!`; for a qualified
 path, only the final group segment is mapped to the generated module.
 `registry!(group = admin, auth = AdminAuth, dependencies(...))` fixes that group's
 authenticator type; use `Server::bind_with_authenticator` to supply its instance.
-Set `auth = required` or `auth = optional` on each protected function. The default
-is `auth = none`; modules do not implicitly change authentication or route paths.
+Declare `#[auth]` on each protected function. Functions without an `#[auth]`
+parameter are public; modules do not implicitly change authentication or route paths.
 `consumes` and `produces` default to `json`; `protobuf` is reserved.
 
 `handlers!` returns `Result<Router<A>, RegistryError>` and rejects conflicting
@@ -212,17 +213,14 @@ and [the router design](docs/router-buckets.md) for matching and allocation deta
 
 ## Authentication
 
-Authentication is a typed API context, not a raw `Authorization` header in a
-business method. Function auth defaults to `none`; set `auth = required` on each protected route. `auth = optional`
-injects an `Option<Authenticated<T>>`; it treats absent credentials as `None`
-but rejects malformed credentials with `401`.
+Authentication is a typed API parameter, not a raw `Authorization` header in a
+business method. `#[auth] actor: T` requires credentials. `#[auth] actor: Option<T>`
+treats absent credentials as `None` but rejects malformed credentials with `401`.
 
 ```rust,no_run
 use std::future::Future;
 
-use brz_http_server::{
-    AuthFailure, AuthRequest, Authenticated, Authenticator,
-};
+use brz_http_server::{AuthFailure, AuthRequest, Authenticator};
 use serde::Serialize;
 
 struct Actor {
@@ -231,9 +229,7 @@ struct Actor {
 
 struct InternalAuth;
 
-impl Authenticator for InternalAuth {
-    type Principal = Actor;
-
+impl Authenticator<Actor> for InternalAuth {
     fn authenticate<'a>(
         &'a self,
         request: AuthRequest<'a>,
@@ -262,9 +258,9 @@ struct HealthView {
 
 brz_http_server::registry!(auth = InternalAuth);
 
-#[brz_http_server::get("/v1/users/:id", auth = required)]
-async fn get(id: u64, actor: Authenticated<Actor>) -> UserView {
-    let _caller = actor.principal().user_id;
+#[brz_http_server::get("/v1/users/:id")]
+async fn get(id: u64, #[auth] actor: Actor) -> UserView {
+    let _caller = actor.user_id;
     UserView { id }
 }
 
@@ -276,9 +272,10 @@ Start it with `Server::bind_with_authenticator(addr, handlers!()?, InternalAuth)
 
 `AuthRequest` exposes only method, path, headers, and peer address; the body
 remains unavailable to authentication. An authenticator must return an owned
-principal. A JWT implementation can use `type Principal = Jwt<User>`, yielding
-the familiar `Authenticated<Jwt<User>>` business parameter without coupling the
-core server to a particular JWT or crypto library.
+principal. A JWT implementation can implement `Authenticator<Jwt<User>>`, yielding
+an `#[auth] actor: Jwt<User>` business parameter without coupling the core server
+to a particular JWT or crypto library. One authenticator type may implement
+`Authenticator<P>` for multiple principal types.
 
 JSON response encoding uses one serialization pass into arena segments. The
 API macro keeps the JSON reader alive across the business handler's awaits and

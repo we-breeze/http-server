@@ -39,7 +39,7 @@ mod stream;
 #[doc(hidden)]
 pub use api_metrics::ApiMetrics;
 
-pub use auth::{AuthFailure, AuthRequest, Authenticated, Authenticator, NoAuthenticator};
+pub use auth::{AuthFailure, AuthRequest, Authenticator, NoAuthenticator};
 pub use body::{Body, BodyError, Form, Multipart, Upload};
 pub use brz_ds::{EphemeralBytes, EphemeralBytesArena, EphemeralBytesMut};
 pub use bytes::Bytes;
