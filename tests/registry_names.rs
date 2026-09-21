@@ -13,7 +13,7 @@ brz_http_server::registry!(group = r#type, dependencies(label: &'static str));
 mod http_apis {
     use super::Text;
 
-    #[brz_http_server::get("/value")]
+    #[brz_http_server::get("/value", access = public)]
     async fn value(#[inject(label)] label: &str) -> Text {
         Text(label.into())
     }
@@ -22,7 +22,7 @@ mod http_apis {
 mod runtime_check {
     use super::Text;
 
-    #[brz_http_server::get("/value", group = runtime_check)]
+    #[brz_http_server::get("/value", access = public, group = runtime_check)]
     async fn value(#[inject(label)] label: &str) -> Text {
         Text(label.into())
     }
@@ -31,7 +31,7 @@ mod runtime_check {
 mod r#type {
     use super::Text;
 
-    #[brz_http_server::get("/value", group = r#type)]
+    #[brz_http_server::get("/value", access = public, group = r#type)]
     async fn value(#[inject(label)] label: &str) -> Text {
         Text(label.into())
     }
@@ -45,7 +45,7 @@ mod listeners {
     mod runtime_check {
         use super::Text;
 
-        #[brz_http_server::get("/value", group = super::runtime_check)]
+        #[brz_http_server::get("/value", access = public, group = super::runtime_check)]
         async fn value(#[inject(label)] label: &str) -> Text {
             Text(label.into())
         }

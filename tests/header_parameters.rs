@@ -8,7 +8,7 @@ use tokio::{
 
 brz_http_server::registry!();
 
-#[brz_http_server::get("/headers/:id")]
+#[brz_http_server::get("/headers/:id", access = public)]
 async fn headers(
     #[header] required: u32,
     #[header("authorization")] token: Option<&str>,

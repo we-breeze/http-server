@@ -12,6 +12,7 @@ use crate::{EphemeralBytesArena, Header, Request, Response, StatusCode};
 pub struct AuthRequest<'a> {
     method: &'a str,
     path: &'a str,
+    query: Option<&'a str>,
     headers: &'a [Header<'a>],
     peer_addr: SocketAddr,
 }
@@ -23,6 +24,7 @@ impl<'a> AuthRequest<'a> {
         Self {
             method: request.method(),
             path: request.path(),
+            query: request.query(),
             headers: request.headers(),
             peer_addr: request.peer_addr(),
         }
@@ -38,6 +40,12 @@ impl<'a> AuthRequest<'a> {
     #[must_use]
     pub fn path(self) -> &'a str {
         self.path
+    }
+
+    /// Raw query string without the leading `?`, when present.
+    #[must_use]
+    pub fn query(self) -> Option<&'a str> {
+        self.query
     }
 
     /// Returns the first case-insensitive matching request header.

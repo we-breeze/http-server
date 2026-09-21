@@ -19,12 +19,12 @@ struct UserService;
 
 registry!(dependencies(state: Arc<AppState>, users: Arc<UserService>));
 
-#[get("/info/name")]
+#[get("/info/name", access = public)]
 async fn name<'a>(#[inject(state)] application: &'a AppState) -> &'a str {
     &application.name
 }
 
-#[get("/health")]
+#[get("/health", access = public)]
 async fn health() -> bool { true }
 
 fn main() {
@@ -57,9 +57,11 @@ the body. `#[header]` reads a header with the parameter's name (without a raw
 identifier's `r#` prefix); `#[header("x-api-key")]` specifies its name explicitly.
 Underscores remain underscores. `Option<T>` permits a missing header; `T` requires
 one. Repeated annotations and conflicting parameter sources are compile errors.
-The route-level `headers(...)` syntax is no longer supported. `#[auth] principal: T`
-requires authentication and injects an owned principal; `#[auth] principal: Option<T>`
-permits missing credentials but rejects invalid credentials. A parameter can use
+The route-level `headers(...)` syntax is no longer supported. Route access defaults
+to `required`: it requires exactly one `#[auth] principal: T` parameter and injects
+an owned principal. `access = optional` requires `#[auth] principal: Option<T>`;
+it permits missing credentials but rejects invalid credentials. `access = public`
+disables authentication and forbids an `#[auth]` parameter. A parameter can use
 only one input source. Functions remain directly callable with ordinary Rust
 arguments, including borrowed inputs and outputs.
 Raw `/` bytes establish path segment boundaries before capture decoding, so an
@@ -75,7 +77,7 @@ use brz_http_server::{get, handlers, registry};
 registry!(group = admin, dependencies(label: String));
 
 mod endpoints {
-    #[brz_http_server::get("/admin/name", group = admin)]
+    #[brz_http_server::get("/admin/name", access = public, group = admin)]
     async fn name(#[inject(label)] label: &str) -> String { label.to_owned() }
 }
 
@@ -94,8 +96,10 @@ Keep using the logical name in route attributes and `handlers!`; for a qualified
 path, only the final group segment is mapped to the generated module.
 `registry!(group = admin, auth = AdminAuth, dependencies(...))` fixes that group's
 authenticator type; use `Server::bind_with_authenticator` to supply its instance.
-Declare `#[auth]` on each protected function. Functions without an `#[auth]`
-parameter are public; modules do not implicitly change authentication or route paths.
+Every route declares an access contract, explicitly or through the secure
+`required` default. Public routes must opt out with `access = public`; optional
+authentication uses `access = optional`. The macro rejects an access mode whose
+`#[auth]` parameter is absent or has the wrong optionality.
 `consumes` and `produces` default to `json`; `protobuf` is reserved.
 
 `handlers!` returns `Result<Router<A>, RegistryError>` and rejects conflicting
@@ -110,7 +114,7 @@ An unknown injection name is a compile-time error:
 ```compile_fail,E0609
 use brz_http_server::{get, registry};
 registry!(dependencies(primary: String));
-#[get("/")]
+#[get("/", access = public)]
 async fn read(#[inject(replica)] db: &str) -> String { db.to_owned() }
 # fn main() {}
 ```
@@ -120,7 +124,7 @@ Injection types must match the named dependency:
 ```compile_fail,E0308
 use brz_http_server::{get, registry};
 registry!(dependencies(state: String));
-#[get("/")]
+#[get("/", access = public)]
 async fn read(#[inject(state)] state: &u64) -> u64 { *state }
 # fn main() {}
 ```
@@ -152,7 +156,7 @@ The injection source must be explicit:
 ```compile_fail
 use brz_http_server::{get, registry};
 registry!(dependencies(state: String));
-#[get("/")]
+#[get("/", access = public)]
 async fn read(#[inject] state: &str) -> String { state.to_owned() }
 # fn main() {}
 ```
@@ -162,7 +166,7 @@ Shared dependencies cannot be injected as exclusive mutable references:
 ```compile_fail
 use brz_http_server::{get, registry};
 registry!(dependencies(state: String));
-#[get("/")]
+#[get("/", access = public)]
 async fn read(#[inject(state)] state: &mut String) -> String { state.clone() }
 # fn main() {}
 ```
@@ -173,7 +177,7 @@ Owned injection requires `Clone`; borrowed injection does not:
 use brz_http_server::{get, registry};
 struct State;
 registry!(dependencies(state: State));
-#[get("/")]
+#[get("/", access = public)]
 async fn read(#[inject(state)] _state: State) -> bool { true }
 # fn main() {}
 ```

@@ -421,7 +421,7 @@ mod tests {
                 quote!(
                     async fn read() {}
                 ),
-                "declare authentication with #[auth]",
+                "supported route options",
             ),
             (
                 quote!("/"),
@@ -480,6 +480,105 @@ mod tests {
                 error.contains(expected),
                 "expected {expected}, received {error}"
             );
+        }
+    }
+
+    #[test]
+    fn validates_route_access_against_authentication_parameters() {
+        for (route, source, expected) in [
+            (
+                quote!("/"),
+                quote!(
+                    async fn read() {}
+                ),
+                "access = required requires exactly one #[auth] parameter",
+            ),
+            (
+                quote!("/", access = required),
+                quote!(
+                    async fn read(#[auth] user: Option<User>) {}
+                ),
+                "access = required requires #[auth] T",
+            ),
+            (
+                quote!("/", access = optional),
+                quote!(
+                    async fn read() {}
+                ),
+                "access = optional requires exactly one #[auth] Option<T> parameter",
+            ),
+            (
+                quote!("/", access = optional),
+                quote!(
+                    async fn read(#[auth] user: User) {}
+                ),
+                "access = optional requires #[auth] Option<T>",
+            ),
+            (
+                quote!("/", access = public),
+                quote!(
+                    async fn read(#[auth] user: User) {}
+                ),
+                "access = public does not allow an #[auth] parameter",
+            ),
+            (
+                quote!("/", access = private),
+                quote!(
+                    async fn read(#[auth] user: User) {}
+                ),
+                "supported access modes",
+            ),
+            (
+                quote!("/", access = public, access = public),
+                quote!(
+                    async fn read() {}
+                ),
+                "supported route options",
+            ),
+        ] {
+            let input = syn::parse2(source).unwrap();
+            let error = expand("GET", &route, input).unwrap_err().to_string();
+            assert!(
+                error.contains(expected),
+                "expected {expected}, received {error}"
+            );
+        }
+
+        for (route, source) in [
+            (
+                quote!("/"),
+                quote!(
+                    async fn read(#[auth] user: User) -> bool {
+                        true
+                    }
+                ),
+            ),
+            (
+                quote!("/", access = required),
+                quote!(
+                    async fn read(#[auth] user: User) -> bool {
+                        true
+                    }
+                ),
+            ),
+            (
+                quote!("/", access = optional),
+                quote!(
+                    async fn read(#[auth] user: Option<User>) -> bool {
+                        true
+                    }
+                ),
+            ),
+            (
+                quote!("/", access = public),
+                quote!(
+                    async fn read() -> bool {
+                        true
+                    }
+                ),
+            ),
+        ] {
+            expand("GET", &route, syn::parse2(source).unwrap()).unwrap();
         }
     }
 }

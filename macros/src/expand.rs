@@ -15,6 +15,28 @@ enum Codec {
     Protobuf,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Access {
+    Required,
+    Optional,
+    Public,
+}
+
+impl Parse for Access {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let value: Ident = input.parse()?;
+        match value.to_string().as_str() {
+            "required" => Ok(Self::Required),
+            "optional" => Ok(Self::Optional),
+            "public" => Ok(Self::Public),
+            _ => Err(syn::Error::new_spanned(
+                value,
+                "supported access modes are required, optional, and public",
+            )),
+        }
+    }
+}
+
 impl Parse for Codec {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let value: Ident = input.parse()?;
@@ -33,6 +55,7 @@ struct RouteArguments {
     path: LitStr,
     consumes: Option<Codec>,
     produces: Option<Codec>,
+    access: Access,
     api_log: bool,
     group: Option<syn::Path>,
 }
@@ -42,6 +65,7 @@ impl Parse for RouteArguments {
         let path = input.parse()?;
         let mut consumes = None;
         let mut produces = None;
+        let mut access = None;
         let mut api_log = true;
         let mut group = None;
         while !input.is_empty() {
@@ -61,6 +85,8 @@ impl Parse for RouteArguments {
                 consumes = Some(input.parse()?);
             } else if name == "produces" {
                 produces = Some(input.parse()?);
+            } else if name == "access" && access.is_none() {
+                access = Some(input.parse()?);
             } else if name == "api_log" {
                 api_log = input.parse::<LitBool>()?.value;
             } else if name == "group" && group.is_none() {
@@ -68,7 +94,7 @@ impl Parse for RouteArguments {
             } else {
                 return Err(syn::Error::new_spanned(
                     name,
-                    "supported route options are consumes, produces, api_log, and group (once); declare authentication with #[auth] on a parameter",
+                    "supported route options are consumes, produces, access, api_log, and group (once)",
                 ));
             }
         }
@@ -76,6 +102,7 @@ impl Parse for RouteArguments {
             path,
             consumes,
             produces,
+            access: access.unwrap_or(Access::Required),
             api_log,
             group,
         })
@@ -89,6 +116,7 @@ struct Endpoint {
     parameters: Vec<Parameter>,
     result: ResultKind,
     has_json_body: bool,
+    access: Access,
     api_log: bool,
 }
 
@@ -547,6 +575,12 @@ fn parse_endpoint(
             };
         }
     }
+    validate_access(
+        route.access,
+        &parameters,
+        authentication_parameter.as_ref(),
+        &route.path,
+    )?;
     let result = result_kind(&function.sig.output)?;
     Ok(Endpoint {
         method,
@@ -557,8 +591,51 @@ fn parse_endpoint(
             .any(|parameter| matches!(parameter.source, ParameterSource::JsonBody)),
         parameters,
         result,
+        access: route.access,
         api_log: route.api_log,
     })
+}
+
+fn validate_access(
+    access: Access,
+    parameters: &[Parameter],
+    authentication_parameter: Option<&Ident>,
+    path: &LitStr,
+) -> syn::Result<()> {
+    let parameter = parameters
+        .iter()
+        .find(|parameter| matches!(parameter.source, ParameterSource::Auth));
+    match (access, parameter) {
+        (Access::Required, None) => Err(syn::Error::new_spanned(
+            path,
+            "access = required requires exactly one #[auth] parameter",
+        )),
+        (Access::Optional, None) => Err(syn::Error::new_spanned(
+            path,
+            "access = optional requires exactly one #[auth] Option<T> parameter",
+        )),
+        (Access::Public, Some(parameter)) => Err(syn::Error::new_spanned(
+            &parameter.ty,
+            "access = public does not allow an #[auth] parameter",
+        )),
+        (Access::Required, Some(parameter)) if option_inner(&parameter.ty).is_some() => {
+            Err(syn::Error::new_spanned(
+                &parameter.ty,
+                "access = required requires #[auth] T, not Option<T>",
+            ))
+        }
+        (Access::Optional, Some(parameter)) if option_inner(&parameter.ty).is_none() => {
+            Err(syn::Error::new_spanned(
+                &parameter.ty,
+                "access = optional requires #[auth] Option<T>",
+            ))
+        }
+        (Access::Required | Access::Optional, Some(parameter)) => {
+            debug_assert_eq!(authentication_parameter, Some(&parameter.ident));
+            Ok(())
+        }
+        (Access::Public, None) => Ok(()),
+    }
 }
 
 fn authentication_principal(groups: &[RouteGroup]) -> syn::Result<Option<Type>> {
