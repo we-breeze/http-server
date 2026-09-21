@@ -17,7 +17,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{Notify, oneshot};
 
-#[brz_http_server::get("/file")]
+#[brz_http_server::get("/file", access = public)]
 async fn file() -> impl Stream<Item = Result<Bytes, Infallible>> + Send + 'static {
     stream::iter([
         Ok(Bytes::from_static(b"hello")),
@@ -25,7 +25,7 @@ async fn file() -> impl Stream<Item = Result<Bytes, Infallible>> + Send + 'stati
         Ok(Bytes::from_static(b"\0\xffworld")),
     ])
 }
-#[brz_http_server::get("/range")]
+#[brz_http_server::get("/range", access = public)]
 async fn range() -> HttpResponse<impl Stream<Item = io::Result<Bytes>> + Send + 'static> {
     HttpResponse::new(stream::iter([Ok(Bytes::from_static(b"xyz"))]))
         .status(StatusCode::PARTIAL_CONTENT)
@@ -37,11 +37,11 @@ async fn range() -> HttpResponse<impl Stream<Item = io::Result<Bytes>> + Send + 
         .header("content-disposition", "attachment; filename=video.mp4")
         .unwrap()
 }
-#[brz_http_server::get("/short")]
+#[brz_http_server::get("/short", access = public)]
 async fn short() -> HttpResponse<impl Stream<Item = io::Result<Bytes>> + Send + 'static> {
     HttpResponse::new(stream::iter([Ok(Bytes::from_static(b"abc"))])).content_length(4)
 }
-#[brz_http_server::get("/long")]
+#[brz_http_server::get("/long", access = public)]
 async fn long() -> HttpResponse<impl Stream<Item = io::Result<Bytes>> + Send + 'static> {
     HttpResponse::new(stream::iter([
         Ok(Bytes::from_static(b"abc")),
@@ -49,14 +49,14 @@ async fn long() -> HttpResponse<impl Stream<Item = io::Result<Bytes>> + Send + '
     ]))
     .content_length(4)
 }
-#[brz_http_server::get("/error")]
+#[brz_http_server::get("/error", access = public)]
 async fn error() -> impl Stream<Item = io::Result<Bytes>> + Send + 'static {
     stream::iter([
         Ok(Bytes::from_static(b"abc")),
         Err(io::Error::other("upstream failed")),
     ])
 }
-#[brz_http_server::get("/empty")]
+#[brz_http_server::get("/empty", access = public)]
 async fn empty() -> impl Stream<Item = io::Result<Bytes>> + Send + 'static {
     stream::empty()
 }

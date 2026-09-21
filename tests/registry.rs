@@ -27,7 +27,7 @@ brz_http_server::registry!(group = manual_apis);
 
 mod parcels {
     use super::{AppState, Text};
-    #[brz_http_server::get("/fixture/parcels/:parcel")]
+    #[brz_http_server::get("/fixture/parcels/:parcel", access = public)]
     async fn read(#[inject(state)] state: &AppState, parcel: &str) -> Text {
         tokio::task::yield_now().await;
         Text(format!("{}:parcel:{parcel}", state.label))
@@ -35,31 +35,31 @@ mod parcels {
 }
 mod lanterns {
     use super::{AppState, Text};
-    #[brz_http_server::get("/fixture/lanterns/:lantern")]
+    #[brz_http_server::get("/fixture/lanterns/:lantern", access = public)]
     async fn read(lantern: u64, #[inject(state)] application: &AppState) -> Text {
         Text(format!("{}:lantern:{lantern}", application.label))
     }
 }
 
-#[brz_http_server::get("/fixture/manual", group = manual_apis)]
+#[brz_http_server::get("/fixture/manual", access = public, group = manual_apis)]
 async fn manual() -> Text {
     Text("manual".into())
 }
 
 // Disabled functions must not register routes or resolve missing types/dependencies.
 #[cfg(any())]
-#[brz_http_server::get("/fixture/disabled")]
+#[brz_http_server::get("/fixture/disabled", access = public)]
 async fn disabled(#[inject(missing)] missing: &MissingType) -> MissingResponse {
     unreachable!()
 }
 
-#[brz_http_server::get("/fixture/disabled-after")]
+#[brz_http_server::get("/fixture/disabled-after", access = public)]
 #[cfg(any())]
 async fn disabled_after(#[inject(missing)] missing: &MissingType) -> MissingResponse {
     unreachable!()
 }
 
-#[brz_http_server::get("/fixture/disabled-conditional")]
+#[brz_http_server::get("/fixture/disabled-conditional", access = public)]
 #[cfg_attr(all(), cfg(any()))]
 async fn disabled_conditional(#[inject(missing)] missing: &MissingType) -> MissingResponse {
     unreachable!()
@@ -70,7 +70,11 @@ mod northern {
     pub(super) type State = &'static str;
     type Auth = brz_http_server::NoAuthenticator;
     brz_http_server::registry!(dependencies(state: State), auth = Auth);
-    #[brz_http_server::get("/fixture/nested", group = crate::northern::http_apis)]
+    #[brz_http_server::get(
+        "/fixture/nested",
+        access = public,
+        group = crate::northern::http_apis
+    )]
     async fn read(#[inject(state)] state: &str) -> Text {
         Text(format!("north:7:{state}"))
     }
@@ -79,14 +83,22 @@ mod southern {
     use super::Text;
     pub(super) type State = u64;
     brz_http_server::registry!(dependencies(state: State));
-    #[brz_http_server::get("/fixture/nested", group = crate::southern::http_apis)]
+    #[brz_http_server::get(
+        "/fixture/nested",
+        access = public,
+        group = crate::southern::http_apis
+    )]
     async fn read(#[inject(state)] state: State) -> Text {
         Text(format!("south:{state}"))
     }
 }
 mod alternates {
     use super::Text;
-    #[brz_http_server::get("/fixture/alternate", group = alternate_apis)]
+    #[brz_http_server::get(
+        "/fixture/alternate",
+        access = public,
+        group = alternate_apis
+    )]
     async fn read(#[inject(label)] label: &str) -> Text {
         Text(label.into())
     }
@@ -112,7 +124,7 @@ async fn vault(slot: u32, #[inject(label)] label: &str, #[auth] actor: Principal
 
 macro_rules! stateless_api {
     ($name:ident, $registry:path, $method:ident, $path:literal, $parameter:ident, $body:literal) => {
-        #[brz_http_server::$method($path, group = $registry)]
+        #[brz_http_server::$method($path, access = public, group = $registry)]
         async fn $name($parameter: &str) -> Text {
             Text(format!(concat!($body, ":{}"), $parameter))
         }
@@ -174,7 +186,11 @@ stateless_api!(
     value,
     "parameter"
 );
-#[brz_http_server::get("/choice/fixed", group = precedence_apis)]
+#[brz_http_server::get(
+    "/choice/fixed",
+    access = public,
+    group = precedence_apis
+)]
 async fn choice_static() -> Text {
     Text("static".into())
 }

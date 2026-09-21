@@ -21,32 +21,32 @@ brz_http_server::registry!(dependencies(calls: Arc<AtomicUsize>));
 brz_http_server::registry!(group = shards, dependencies(number: usize));
 brz_http_server::registry!(group = private, dependencies(value: &'static str), auth = Auth);
 
-#[brz_http_server::get("/users/byname")]
+#[brz_http_server::get("/users/byname", access = public)]
 async fn byname(#[inject(calls)] calls: &AtomicUsize) -> Text {
     calls.fetch_add(1, Ordering::Relaxed);
     Text("static".into())
 }
 
-#[brz_http_server::get("/users/:id")]
+#[brz_http_server::get("/users/:id", access = public)]
 async fn read(#[inject(calls)] calls: &AtomicUsize, id: &str) -> Text {
     calls.fetch_add(1, Ordering::Relaxed);
     tokio::task::yield_now().await;
     Text(format!("read:{id}"))
 }
 
-#[brz_http_server::post("/users/:id")]
+#[brz_http_server::post("/users/:id", access = public)]
 async fn write(#[inject(calls)] calls: &AtomicUsize, id: &str) -> Text {
     calls.fetch_add(1, Ordering::Relaxed);
     Text(format!("write:{id}"))
 }
 
-#[brz_http_server::put("/users/*rest")]
+#[brz_http_server::put("/users/*rest", access = public)]
 async fn rest(#[inject(calls)] calls: &AtomicUsize, rest: &str) -> Text {
     calls.fetch_add(1, Ordering::Relaxed);
     Text(format!("rest:{rest}"))
 }
 
-#[brz_http_server::get("/shard", group = shards)]
+#[brz_http_server::get("/shard", access = public, group = shards)]
 async fn shard(#[inject(number)] number: usize) -> usize {
     number
 }
@@ -223,7 +223,7 @@ async fn private(#[inject(value)] value: &str, #[auth] _actor: Principal) -> Tex
     Text(value.into())
 }
 
-#[brz_http_server::get("/users/byname", group = private)]
+#[brz_http_server::get("/users/byname", access = public, group = private)]
 async fn public() -> Text {
     Text("static".into())
 }

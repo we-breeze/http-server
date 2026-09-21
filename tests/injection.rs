@@ -54,7 +54,7 @@ struct View<'a> {
     id: u64,
 }
 
-#[brz_http_server::post("/borrow/:id")]
+#[brz_http_server::post("/borrow/:id", access = public)]
 async fn borrowed<'a>(
     #[inject(state)] application: &'a AppState,
     id: u64,
@@ -71,7 +71,7 @@ async fn borrowed<'a>(
     })
 }
 
-#[brz_http_server::get("/stores")]
+#[brz_http_server::get("/stores", access = public)]
 async fn stores(
     #[inject(replica)] reader: &Store,
     #[inject(primary)] writer: &Store,
@@ -81,7 +81,7 @@ async fn stores(
     Text(format!("{}:{}", reader.name, writer.name))
 }
 
-#[brz_http_server::get("/owned")]
+#[brz_http_server::get("/owned", access = public)]
 async fn owned(#[inject(probe)] probe: CloneProbe, #[inject(primary)] store: StoreHandle) -> Text {
     tokio::task::yield_now().await;
     Text(format!(
@@ -92,7 +92,7 @@ async fn owned(#[inject(probe)] probe: CloneProbe, #[inject(primary)] store: Sto
 }
 
 // Function and parameter names may coincide, including generated-looking names.
-#[brz_http_server::get("/echo")]
+#[brz_http_server::get("/echo", access = public)]
 async fn echo(
     #[inject(state)] echo: &AppState,
     __http_business_function: &str,
@@ -103,18 +103,18 @@ async fn echo(
     Text(format!("{}:{__http_business_function}:{value}", echo.name))
 }
 
-#[brz_http_server::get("/health")]
+#[brz_http_server::get("/health", access = public)]
 async fn health() -> bool {
     true
 }
 
-#[brz_http_server::get("/name")]
+#[brz_http_server::get("/name", access = public)]
 #[cfg_attr(all(), inline)]
 async fn name(#[inject(state)] state: &AppState) -> &str {
     &state.name
 }
 
-#[brz_http_server::get("/mutable")]
+#[brz_http_server::get("/mutable", access = public)]
 async fn mutable(mut value: String) -> String {
     value.push('!');
     value

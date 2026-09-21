@@ -89,12 +89,12 @@ struct UserService;
 
 registry!(dependencies(state: Arc<AppState>, users: Arc<UserService>));
 
-#[get("/info/name")]
+#[get("/info/name", access = public)]
 async fn name<'a>(#[inject(state)] application: &'a AppState) -> &'a str {
     &application.name
 }
 
-#[get("/health")]
+#[get("/health", access = public)]
 async fn health() -> bool { true }
 
 fn main() {
@@ -127,9 +127,11 @@ the body. `#[header]` reads a header with the parameter's name (without a raw
 identifier's `r#` prefix); `#[header("x-api-key")]` specifies its name explicitly.
 Underscores remain underscores. `Option<T>` permits a missing header; `T` requires
 one. Repeated annotations and conflicting parameter sources are compile errors.
-The route-level `headers(...)` syntax is no longer supported. `#[auth] principal: T`
-requires authentication and injects an owned principal; `#[auth] principal: Option<T>`
-permits missing credentials but rejects invalid credentials. A parameter can use
+The route-level `headers(...)` syntax is no longer supported. Route access defaults
+to `required`: it requires exactly one `#[auth] principal: T` parameter and injects
+an owned principal. `access = optional` requires `#[auth] principal: Option<T>`;
+it permits missing credentials but rejects invalid credentials. `access = public`
+disables authentication and forbids an `#[auth]` parameter. A parameter can use
 only one input source. Functions remain directly callable with ordinary Rust
 arguments, including borrowed inputs and outputs.
 
@@ -143,7 +145,7 @@ use brz_http_server::{get, handlers, registry};
 registry!(group = admin, dependencies(label: String));
 
 mod endpoints {
-    #[brz_http_server::get("/admin/name", group = admin)]
+    #[brz_http_server::get("/admin/name", access = public, group = admin)]
     async fn name(#[inject(label)] label: &str) -> String { label.to_owned() }
 }
 
@@ -162,8 +164,10 @@ Keep using the logical name in route attributes and `handlers!`; for a qualified
 path, only the final group segment is mapped to the generated module.
 `registry!(group = admin, auth = AdminAuth, dependencies(...))` fixes that group's
 authenticator type; use `Server::bind_with_authenticator` to supply its instance.
-Declare `#[auth]` on each protected function. Functions without an `#[auth]`
-parameter are public; modules do not implicitly change authentication or route paths.
+Every route declares an access contract, explicitly or through the secure
+`required` default. Public routes must opt out with `access = public`; optional
+authentication uses `access = optional`. The macro rejects an access mode whose
+`#[auth]` parameter is absent or has the wrong optionality.
 `consumes` and `produces` default to `json`; `protobuf` is reserved.
 
 `handlers!` returns `Result<Router<A>, RegistryError>` and rejects conflicting
@@ -186,7 +190,7 @@ struct UpdateUser<'a> { name: &'a str }
 #[derive(Serialize)]
 struct UserView<'a> { id: u64, name: &'a str }
 
-#[post("/v1/users/:id")]
+#[post("/v1/users/:id", access = public)]
 async fn update<'a>(
     #[inject(state)] _state: &AppState,
     id: u64,
@@ -214,8 +218,11 @@ and [the router design](docs/router-buckets.md) for matching and allocation deta
 ## Authentication
 
 Authentication is a typed API parameter, not a raw `Authorization` header in a
-business method. `#[auth] actor: T` requires credentials. `#[auth] actor: Option<T>`
-treats absent credentials as `None` but rejects malformed credentials with `401`.
+business method. Access is secure by default: an omitted `access` option means
+`access = required` and requires `#[auth] actor: T`. `access = optional` requires
+`#[auth] actor: Option<T>`; it treats absent credentials as `None` but rejects
+malformed credentials with `401`. `access = public` forbids `#[auth]` and does not
+invoke the authenticator.
 
 ```rust,no_run
 use std::future::Future;
@@ -264,7 +271,7 @@ async fn get(id: u64, #[auth] actor: Actor) -> UserView {
     UserView { id }
 }
 
-#[brz_http_server::get("/v1/users/health")]
+#[brz_http_server::get("/v1/users/health", access = public)]
 async fn health() -> HealthView { HealthView { ok: true } }
 ```
 
@@ -338,7 +345,7 @@ capped at 2 KiB, to `breeze.slow`.
 
 An exported route may opt out of `api.log` while retaining metrics and slow
 request logging with `api_log = false`, for example
-`#[get("/health", api_log = false)]`.
+`#[get("/health", access = public, api_log = false)]`.
 
 The API line is positional and contains no key/value fields or body:
 

@@ -96,7 +96,7 @@ async fn get_private(id: u64, #[auth] actor: Actor) -> PrivateView {
     }
 }
 
-#[brz_http_server::get("/private/optional", group = protected)]
+#[brz_http_server::get("/private/optional", access = optional, group = protected)]
 async fn optional(#[auth] actor: Option<Actor>) -> OptionalAuthView {
     std::future::ready(()).await;
     OptionalAuthView {
@@ -109,13 +109,18 @@ async fn service(#[auth] service: ServiceActor) -> ServiceView {
     ServiceView { name: service.name }
 }
 
-#[brz_http_server::get("/private/health", api_log = false, group = protected)]
+#[brz_http_server::get(
+    "/private/health",
+    access = public,
+    api_log = false,
+    group = protected
+)]
 async fn health() -> HealthView {
     std::future::ready(()).await;
     HealthView { ok: true }
 }
 
-#[brz_http_server::get("/v1/users/:id")]
+#[brz_http_server::get("/v1/users/:id", access = public)]
 async fn get(
     #[inject(calls)] calls: &AtomicUsize,
     id: u64,
@@ -131,7 +136,7 @@ async fn get(
     }
 }
 
-#[brz_http_server::post("/v1/users/:id")]
+#[brz_http_server::post("/v1/users/:id", access = public)]
 async fn update<'a>(
     #[inject(calls)] calls: &AtomicUsize,
     id: u64,

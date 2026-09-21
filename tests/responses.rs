@@ -25,7 +25,7 @@ async fn request(handler: impl Handler, request: &str) -> Vec<u8> {
     task.await.unwrap().unwrap();
     out
 }
-#[brz_http_server::get("/callback")]
+#[brz_http_server::get("/callback", access = public)]
 async fn callback(redirect: &str) -> Redirect {
     Redirect::found(redirect)
 }
@@ -49,11 +49,11 @@ async fn redirect_encodes_source_error_message() {
         "{response}"
     );
 }
-#[brz_http_server::get("/items")]
+#[brz_http_server::get("/items", access = public)]
 async fn list() -> u64 {
     1
 }
-#[brz_http_server::post("/items")]
+#[brz_http_server::post("/items", access = public)]
 async fn create() -> u64 {
     2
 }
@@ -72,7 +72,7 @@ brz_http_server::registry!();
 
 type HttpStatus = http::StatusCode;
 type FailedPayload = (HttpStatus, std::collections::HashMap<Vec<u8>, i64>);
-#[brz_http_server::get("/invalid")]
+#[brz_http_server::get("/invalid", access = public)]
 async fn invalid() -> FailedPayload {
     (
         http::StatusCode::CREATED,

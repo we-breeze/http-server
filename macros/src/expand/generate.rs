@@ -1,6 +1,6 @@
 use super::{
-    Endpoint, LitStr, Parameter, ParameterSource, ResultKind, RouteGroup, TokenStream2, method_bit,
-    option_inner, quote,
+    Access, Endpoint, LitStr, Parameter, ParameterSource, ResultKind, RouteGroup, TokenStream2,
+    method_bit, quote,
 };
 
 pub(super) fn expand_group(group: &RouteGroup, server: &TokenStream2) -> TokenStream2 {
@@ -80,9 +80,9 @@ fn expand_authentication(endpoint: &Endpoint, server: &TokenStream2) -> TokenStr
     let request = quote! {
         #server::AuthRequest::from_request(&__http_request)
     };
-    match authentication_parameter {
-        None => quote! {},
-        Some(parameter) if option_inner(&parameter.ty).is_none() => {
+    match (endpoint.access, authentication_parameter) {
+        (Access::Public, None) => quote! {},
+        (Access::Required, Some(parameter)) => {
             let ident = &parameter.binding;
             let ty = &parameter.ty;
             quote! {
@@ -98,7 +98,7 @@ fn expand_authentication(endpoint: &Endpoint, server: &TokenStream2) -> TokenStr
                 };
             }
         }
-        Some(parameter) => {
+        (Access::Optional, Some(parameter)) => {
             let ident = &parameter.binding;
             let ty = &parameter.ty;
             quote! {
@@ -114,6 +114,7 @@ fn expand_authentication(endpoint: &Endpoint, server: &TokenStream2) -> TokenStr
                 };
             }
         }
+        _ => unreachable!("route access and authentication are validated during parsing"),
     }
 }
 

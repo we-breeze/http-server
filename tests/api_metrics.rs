@@ -10,12 +10,12 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 
-#[brz_http_server::get("/metric-test/:code")]
+#[brz_http_server::get("/metric-test/:code", access = public)]
 async fn status(code: u16) -> Response {
     Response::empty(StatusCode::from_u16(code).unwrap())
 }
 
-#[brz_http_server::post("/metric-test/:code")]
+#[brz_http_server::post("/metric-test/:code", access = public)]
 async fn create(code: u16) -> Response {
     Response::empty(StatusCode::from_u16(code).unwrap())
 }
@@ -25,17 +25,17 @@ async fn secure(#[auth] _principal: ()) -> StatusCode {
     StatusCode::OK
 }
 
-#[brz_http_server::get("/metric-test/slow")]
+#[brz_http_server::get("/metric-test/slow", access = public)]
 async fn slow() -> StatusCode {
     std::future::pending().await
 }
 
-#[brz_http_server::get("/metric-test/invalid-json")]
+#[brz_http_server::get("/metric-test/invalid-json", access = public)]
 async fn invalid_json() -> BTreeMap<Vec<u8>, u8> {
     [(vec![1, 2], 3)].into_iter().collect()
 }
 
-#[brz_http_server::get("/metric-test/special")]
+#[brz_http_server::get("/metric-test/special", access = public)]
 async fn special() -> StatusCode {
     StatusCode::SEE_OTHER
 }

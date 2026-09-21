@@ -24,7 +24,11 @@ macro_rules! fixture_api {
         mod $name {
             use super::*;
             brz_http_server::registry!(dependencies(calls: Arc<AtomicUsize>));
-            #[brz_http_server::get($path, group = crate::$name::http_apis)]
+            #[brz_http_server::get(
+                $path,
+                access = public,
+                group = crate::$name::http_apis
+            )]
             async fn read(#[inject(calls)] calls: &AtomicUsize, $parameter: $ty) -> (usize, String) {
                 tokio::task::yield_now().await;
                 calls.fetch_add(1, Ordering::Relaxed);
@@ -107,7 +111,7 @@ brz_http_server::registry!(group = shape_matrix, dependencies(calls: Arc<AtomicU
 
 macro_rules! shape_route {
     ($name:ident, $marker:literal, $path:literal) => {
-        #[brz_http_server::get($path, group = shape_matrix)]
+        #[brz_http_server::get($path, access = public, group = shape_matrix)]
         async fn $name(#[inject(calls)] calls: &AtomicUsize, value: &str) -> (usize, String) {
             calls.fetch_add(1, Ordering::Relaxed);
             ($marker, value.to_owned())
@@ -351,17 +355,29 @@ async fn encoded_slashes_stay_inside_one_decoded_capture() {
     server.stop().await;
 }
 
-#[brz_http_server::get("/svc/jobs/search", group = static_neighbors)]
+#[brz_http_server::get(
+    "/svc/jobs/search",
+    access = public,
+    group = static_neighbors
+)]
 async fn search() -> &'static str {
     "static-search"
 }
 
-#[brz_http_server::get("/svc/jobs/42/remote-node/health", group = static_neighbors)]
+#[brz_http_server::get(
+    "/svc/jobs/42/remote-node/health",
+    access = public,
+    group = static_neighbors
+)]
 async fn health() -> &'static str {
     "static-health"
 }
 
-#[brz_http_server::post("/svc/jobs/42/tools", group = static_neighbors)]
+#[brz_http_server::post(
+    "/svc/jobs/42/tools",
+    access = public,
+    group = static_neighbors
+)]
 async fn tools() -> &'static str {
     "static-tools-post"
 }
