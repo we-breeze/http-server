@@ -205,6 +205,8 @@ mod tests {
 
     fn request<'a>(arena: &'a EphemeralBytesArena, headers: &'a [Header<'a>]) -> Request<'a> {
         let body = Box::leak(Box::new(brz_io::Writer::new(arena).into_reader()));
+        #[cfg(feature = "api-log")]
+        let api_log_context = Box::leak(Box::new(crate::api_metrics::ApiLogContext::default()));
         Request::new(
             "GET",
             "/",
@@ -212,6 +214,8 @@ mod tests {
             body,
             "127.0.0.1:1".parse().unwrap(),
             arena,
+            #[cfg(feature = "api-log")]
+            api_log_context,
         )
     }
 

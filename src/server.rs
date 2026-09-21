@@ -522,6 +522,18 @@ where
         target,
         peer_addr,
         inspection.total_len - inspection.head_len,
+        #[cfg(feature = "api-log")]
+        if prepared.api_log() {
+            parsed
+                .headers
+                .iter()
+                .find(|header| header.name.eq_ignore_ascii_case("x-request-id"))
+                .map(|header| header.value)
+        } else {
+            None
+        },
+        #[cfg(not(feature = "api-log"))]
+        None,
     );
 
     let body_len = inspection.total_len - inspection.head_len;
@@ -560,6 +572,8 @@ where
             value: source.value,
         };
     }
+    #[cfg(feature = "slow-log")]
+    observation.request_body(body.as_slice());
     let mut request = Request::new(
         method,
         target,
@@ -567,9 +581,10 @@ where
         &body,
         peer_addr,
         &config.arena,
+        #[cfg(feature = "api-log")]
+        observation.api_log_context(),
     );
     request.rejection_handler = config.rejection_handler;
-    observation.request(&request);
     let cors_origin = request.header("origin");
     let preflight = config
         .cors

@@ -338,8 +338,8 @@ Defaults are a 15 second request timeout and an 8 MiB fixed-length request-body
 limit. At most 64 MiB of request bodies may be retained across concurrent
 handlers; set `ServerConfig::max_in_flight_request_body_bytes` when an upload
 workload needs a different aggregate budget. Enable `api-log` to emit body-free positional access lines containing
-method, raw target, status, millisecond latency, request length, and response
-length to `breeze.api`, and
+method, raw target, status, millisecond latency, request length, response
+length, authenticated principal ID, and request ID to `breeze.api`, and
 `slow-log` to emit requests taking at least 3 seconds, including a body excerpt
 capped at 2 KiB, to `breeze.slow`.
 
@@ -350,10 +350,14 @@ request logging with `api_log = false`, for example
 The API line is positional and contains no key/value fields or body:
 
 ```text
-2026-09-19 14:03:21 [API] GET /api/items?q=a 200 156ms 128 512
+2026-09-19 14:03:21 [API] GET /api/items?q=a 200 156ms 128 512 alice req-123
 ```
 
-An unknown response length is written as `-`.
+The request ID is read from the first `x-request-id` header. A missing or empty
+request ID, an unavailable authenticated principal ID, and an unknown response
+length are written as `-`. A request ID containing non-ASCII bytes is written
+as `<invalid-request-id>`. An authenticator may expose a non-sensitive stable
+principal identifier by overriding [`Authenticator::api_log_id`].
 
 Slow server lines use the positional form below. The request-body detail is
 always the final field:

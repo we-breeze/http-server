@@ -15,6 +15,8 @@ pub struct AuthRequest<'a> {
     query: Option<&'a str>,
     headers: &'a [Header<'a>],
     peer_addr: SocketAddr,
+    #[cfg(feature = "api-log")]
+    api_log_context: &'a crate::api_metrics::ApiLogContext,
 }
 
 impl<'a> AuthRequest<'a> {
@@ -27,6 +29,8 @@ impl<'a> AuthRequest<'a> {
             query: request.query(),
             headers: request.headers(),
             peer_addr: request.peer_addr(),
+            #[cfg(feature = "api-log")]
+            api_log_context: request.api_log_context,
         }
     }
 
@@ -78,6 +82,14 @@ where
         &'a self,
         request: AuthRequest<'a>,
     ) -> impl Future<Output = std::result::Result<P, AuthFailure>> + Send + 'a;
+
+    /// Returns the authenticated principal identifier written to `api.log`.
+    ///
+    /// The default omits the identifier, which is rendered as `-`. Implementors
+    /// should return a non-sensitive stable identifier such as a username.
+    fn api_log_id<'a>(&'a self, _principal: &'a P) -> Option<&'a dyn std::fmt::Display> {
+        None
+    }
 
     /// Maps authentication failures to the application's HTTP error contract.
     fn reject(
@@ -160,9 +172,16 @@ where
     A: Authenticator<P>,
     P: Send + Sync + 'static,
 {
-    <A as Authenticator<P>>::authenticate(authenticator, request)
+    let principal = <A as Authenticator<P>>::authenticate(authenticator, request)
         .await
-        .map_err(|failure| <A as Authenticator<P>>::reject(authenticator, request, failure, arena))
+        .map_err(|failure| {
+            <A as Authenticator<P>>::reject(authenticator, request, failure, arena)
+        })?;
+    #[cfg(feature = "api-log")]
+    if let Some(id) = <A as Authenticator<P>>::api_log_id(authenticator, &principal) {
+        request.api_log_context.set_auth_id(id);
+    }
+    Ok(principal)
 }
 
 // Keep the owned response inline to avoid a separate error-path allocation.
@@ -178,7 +197,13 @@ where
     P: Send + Sync + 'static,
 {
     match <A as Authenticator<P>>::authenticate(authenticator, request).await {
-        Ok(principal) => Ok(Some(principal)),
+        Ok(principal) => {
+            #[cfg(feature = "api-log")]
+            if let Some(id) = <A as Authenticator<P>>::api_log_id(authenticator, &principal) {
+                request.api_log_context.set_auth_id(id);
+            }
+            Ok(Some(principal))
+        }
         Err(AuthFailure::MissingCredentials { .. }) => Ok(None),
         Err(error) => Err(<A as Authenticator<P>>::reject(
             authenticator,

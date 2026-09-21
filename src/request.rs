@@ -15,6 +15,8 @@ pub struct Request<'a> {
     body: &'a brz_io::Reader,
     peer_addr: SocketAddr,
     response_arena: &'a EphemeralBytesArena,
+    #[cfg(feature = "api-log")]
+    pub(crate) api_log_context: &'a crate::api_metrics::ApiLogContext,
     pub(crate) rejection_handler: crate::RejectionHandler,
 }
 
@@ -26,6 +28,7 @@ impl<'a> Request<'a> {
         body: &'a brz_io::Reader,
         peer_addr: SocketAddr,
         response_arena: &'a EphemeralBytesArena,
+        #[cfg(feature = "api-log")] api_log_context: &'a crate::api_metrics::ApiLogContext,
     ) -> Self {
         Self {
             method,
@@ -34,6 +37,8 @@ impl<'a> Request<'a> {
             body,
             peer_addr,
             response_arena,
+            #[cfg(feature = "api-log")]
+            api_log_context,
             rejection_handler: crate::rejection::default_rejection,
         }
     }
@@ -169,6 +174,8 @@ mod tests {
         let mut writer = brz_io::Writer::new(&arena);
         writer.write_all(raw).unwrap();
         let body = writer.into_reader();
+        #[cfg(feature = "api-log")]
+        let api_log_context = crate::api_metrics::ApiLogContext::default();
         let request = Request::new(
             "POST",
             "/",
@@ -176,6 +183,8 @@ mod tests {
             &body,
             "127.0.0.1:1".parse().unwrap(),
             &arena,
+            #[cfg(feature = "api-log")]
+            &api_log_context,
         );
         let json = request.json_body();
         let name: Name<'_> = json.decode().unwrap();
