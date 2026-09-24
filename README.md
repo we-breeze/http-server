@@ -339,9 +339,9 @@ limit. At most 64 MiB of request bodies may be retained across concurrent
 handlers; set `ServerConfig::max_in_flight_request_body_bytes` when an upload
 workload needs a different aggregate budget. Enable `api-log` to emit body-free positional access lines containing
 method, raw target, status, millisecond latency, request length, response
-length, authenticated principal ID, and request ID to `breeze.api`, and
+length, client address, authenticated principal ID, and request ID to `breeze.api`, and
 `slow-log` to emit requests taking at least 3 seconds, including a body excerpt
-capped at 2 KiB, to `breeze.slow`.
+capped at 512 bytes, to `breeze.slow`.
 
 An exported route may opt out of `api.log` while retaining metrics and slow
 request logging with `api_log = false`, for example
@@ -350,14 +350,35 @@ request logging with `api_log = false`, for example
 The API line is positional and contains no key/value fields or body:
 
 ```text
-2026-09-19 14:03:21 [API] GET /api/items?q=a 200 156ms 128 512 alice req-123
+2026-09-19 14:03:21 [API] GET /api/items?q=a 200 156ms 128 512 10.0.1.7,10.0.0.1 alice req-123
 ```
 
 The request ID is read from the first `x-request-id` header. A missing or empty
 request ID, an unavailable authenticated principal ID, and an unknown response
-length are written as `-`. A request ID containing non-ASCII bytes is written
-as `<invalid-request-id>`. An authenticator may expose a non-sensitive stable
+length are written as `-`. A request ID that is not UTF-8 is written as
+`<invalid-request-id>`. An authenticator may expose a non-sensitive stable
 principal identifier by overriding [`Authenticator::api_log_id`].
+
+The client address field holds the whole `x-forwarded-for` chain the gateway
+appends to, with ASCII whitespace removed so the positional line cannot shift.
+It is not filtered down to a single hop, so the earlier entries stay readable
+while triaging. When the header is absent or holds no address, the accepted TCP
+peer is written instead, and a chain that is not UTF-8 is written as
+`<invalid-client-ip>`.
+
+The method and target fields hold a prefix: 16 and 128 bytes. A longer method
+token or request target is malformed input already, so its tail is dropped
+rather than paid for with a heap allocation on every request. Nothing marks the
+cut, so read the target field as "the first 128 bytes of the raw target".
+
+The request ID and client address fields are not truncated, because both are
+short identifiers whose value would be lost by cutting them: a value past the
+inline capacity of 62 bytes moves to the heap instead. The body excerpt on a
+slow line is capped at 512 bytes the same way the method and target are.
+
+Those capacities are a footprint decision, not an implementation detail: one
+`Observation` is live on the stack for the whole of every connection, and its
+size is asserted at compile time to stay within 1024 bytes.
 
 Slow server lines use the positional form below. The request-body detail is
 always the final field:
