@@ -517,23 +517,28 @@ where
     let prepared = handler.prepare(path, method);
     observation.matched(prepared.metrics());
     observation.set_api_log(prepared.api_log());
+    #[cfg(feature = "api-log")]
+    let (request_id, forwarded_for) = if prepared.api_log() {
+        let find = |name: &str| {
+            parsed
+                .headers
+                .iter()
+                .find(|header| header.name.eq_ignore_ascii_case(name))
+                .map(|header| header.value)
+        };
+        (find("x-request-id"), find("x-forwarded-for"))
+    } else {
+        (None, None)
+    };
     observation.request_head(
         method,
         target,
         peer_addr,
         inspection.total_len - inspection.head_len,
         #[cfg(feature = "api-log")]
-        if prepared.api_log() {
-            parsed
-                .headers
-                .iter()
-                .find(|header| header.name.eq_ignore_ascii_case("x-request-id"))
-                .map(|header| header.value)
-        } else {
-            None
-        },
+        (request_id, forwarded_for),
         #[cfg(not(feature = "api-log"))]
-        None,
+        (None, None),
     );
 
     let body_len = inspection.total_len - inspection.head_len;
