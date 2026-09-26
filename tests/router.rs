@@ -135,7 +135,7 @@ async fn send(
 }
 
 #[tokio::test]
-async fn resolves_once_and_dispatches_static_parameters_and_wildcards() {
+async fn prepares_before_body_and_dispatches_static_parameters_and_wildcards() {
     let invoked = Arc::new(AtomicUsize::new(0));
     let prepared = Arc::new(AtomicUsize::new(0));
     let router = brz_http_server::handlers!(calls = invoked.clone())
@@ -193,18 +193,23 @@ async fn resolves_once_and_dispatches_static_parameters_and_wildcards() {
             .await
             .starts_with("HTTP/1.1 408")
     );
-    assert_eq!(prepared.load(Ordering::Relaxed), 12);
+    // Eleven complete requests resolve again after body receive; the timed-out
+    // request resolves only once, before waiting for its body.
+    assert_eq!(prepared.load(Ordering::Relaxed), 23);
     assert_eq!(invoked.load(Ordering::Relaxed), 8);
-    let mut recorded = false;
-    brz_metrics::visit(|name, kind, snapshot| {
-        if kind == "APITO" && name == "/users/:id" {
-            recorded = snapshot.total >= 1;
-        }
-    });
-    assert!(
-        recorded,
-        "body-read timeout must retain the matched route's metrics"
-    );
+    #[cfg(feature = "metrics")]
+    {
+        let mut recorded = false;
+        brz_metrics::visit(|name, kind, snapshot| {
+            if kind == "APITO" && name == "/users/:id" {
+                recorded = snapshot.total >= 1;
+            }
+        });
+        assert!(
+            recorded,
+            "body-read timeout must retain the matched route's metrics"
+        );
+    }
     tx.send(()).unwrap();
     task.await.unwrap().unwrap();
 }

@@ -3,8 +3,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bytes::{Buf, BufMut, BytesMut};
-use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
@@ -13,6 +11,9 @@ use tracing::{debug, warn};
 use crate::{
     EphemeralBytesArena, Error, Header, NoAuthenticator, Request, Response, Result, StatusCode,
 };
+
+mod receive;
+use receive::{ReceiveState, RequestContext, receive_and_handle};
 
 mod write;
 use write::write_response;
@@ -111,6 +112,13 @@ pub struct ServerConfig {
     /// Clone the same arena into dependent SDKs at process startup when they
     /// should share its two chunks.
     pub arena: EphemeralBytesArena,
+    /// First receive segment, allocated lazily on socket readability (default 2 KiB).
+    /// This is not the arena's backing chunk capacity.
+    pub initial_request_segment_bytes: usize,
+    /// Maximum *remaining* Body size reserved in one contiguous tail (default 64 KiB).
+    /// Larger requests grow in bounded segments; zero disables this fast path.
+    /// The full Body is still buffered before Handler::call in this API.
+    pub max_preallocated_request_body_bytes: usize,
     /// Origin policy; absent when the application does not expose cross-origin APIs.
     pub cors: Option<crate::Cors>,
     /// Application mapping for failed parameter bindings.
@@ -147,6 +155,8 @@ impl ServerConfig {
     pub fn new(arena: EphemeralBytesArena) -> Self {
         Self {
             arena,
+            initial_request_segment_bytes: 2 * 1024,
+            max_preallocated_request_body_bytes: 64 * 1024,
             cors: None,
             rejection_handler: crate::rejection::default_rejection,
             max_connections: 65_536,
@@ -160,6 +170,11 @@ impl ServerConfig {
     }
 
     fn validate(&self) -> Result<()> {
+        if self.initial_request_segment_bytes == 0 {
+            return Err(Error::InvalidConfig(
+                "initial_request_segment_bytes must be greater than zero",
+            ));
+        }
         if self.cors.as_ref().is_some_and(|cors| !cors.validate()) {
             return Err(Error::InvalidConfig("invalid CORS policy"));
         }
@@ -404,17 +419,28 @@ where
     H: Handler<A>,
     A: Send + Sync + 'static,
 {
-    // Allocate only once the peer sends a request. At the 65,536 connection
-    // limit, eagerly reserving 4 KiB per idle keep-alive connection would
-    // consume roughly 256 MiB before processing any application traffic.
-    let mut read_buffer = BytesMut::new();
+    // No separate BytesMut payload. The two common descriptor slots are inline;
+    // segment payloads are allocated on demand from the process-shared arena.
+    let read_buffer = brz_io::Writer::with_initial_segment_size(
+        &config.arena,
+        config.initial_request_segment_bytes,
+    )
+    .into_reader();
+    let mut state = ReceiveState {
+        input: read_buffer,
+        context: RequestContext::new(),
+    };
     loop {
-        let mut observation = crate::api_metrics::Observation::new();
+        let ReceiveState {
+            input: read_buffer,
+            context,
+        } = &mut state;
+        *context = RequestContext::new();
         let result = tokio::time::timeout(
             config.request_timeout,
             receive_and_handle(
                 &mut stream,
-                &mut read_buffer,
+                read_buffer,
                 peer_addr,
                 handler.as_ref(),
                 authenticator.as_ref(),
@@ -422,17 +448,27 @@ where
                     config: &config,
                     body_limit: &request_body_limit,
                 },
-                &mut observation,
+                context,
             ),
         )
         .await;
-
         let (response, consumed, request_keep_alive) = match result {
             Ok(Ok(result)) => result,
-            Ok(Err(RequestFailure::Closed)) => return Ok(()),
+            Ok(Err(RequestFailure::Closed)) => {
+                read_buffer.clear();
+                context.release_budget();
+                return Ok(());
+            }
             Ok(Err(failure)) => {
                 let response = Response::empty(failure.status()).close();
-                observation.record(response.status(), response.body().content_length(), false);
+                context.record(
+                    response.status(),
+                    response.body().content_length(),
+                    false,
+                    read_buffer,
+                );
+                read_buffer.clear();
+                context.release_budget();
                 write_response(
                     &mut stream,
                     &config.arena,
@@ -445,7 +481,14 @@ where
             }
             Err(_) => {
                 let response = Response::empty(StatusCode::REQUEST_TIMEOUT).close();
-                observation.record(response.status(), response.body().content_length(), true);
+                context.record(
+                    response.status(),
+                    response.body().content_length(),
+                    true,
+                    read_buffer,
+                );
+                read_buffer.clear();
+                context.release_budget();
                 write_response(
                     &mut stream,
                     &config.arena,
@@ -457,9 +500,20 @@ where
                 return Ok(());
             }
         };
-
-        observation.record(response.status(), response.body().content_length(), false);
+        context.record(
+            response.status(),
+            response.body().content_length(),
+            false,
+            read_buffer,
+        );
         let close = !request_keep_alive || response.should_close();
+        // Request/derived storage and its Body budget must not pin the arena for
+        // a slow download. Only pipelined unread bytes survive this boundary.
+        std::io::BufRead::consume(read_buffer, consumed);
+        if close || read_buffer.is_empty() {
+            read_buffer.clear();
+        }
+        context.release_budget();
         write_response(
             &mut stream,
             &config.arena,
@@ -468,7 +522,6 @@ where
             config.request_timeout,
         )
         .await?;
-        read_buffer.advance(consumed);
         if close {
             return Ok(());
         }
@@ -478,147 +531,6 @@ where
 struct RequestLimits<'a> {
     config: &'a ServerConfig,
     body_limit: &'a Arc<Semaphore>,
-}
-
-async fn receive_and_handle<H, A>(
-    stream: &mut TcpStream,
-    read_buffer: &mut BytesMut,
-    peer_addr: SocketAddr,
-    handler: &H,
-    authenticator: &A,
-    limits: RequestLimits<'_>,
-    observation: &mut crate::api_metrics::Observation,
-) -> std::result::Result<(Response, usize, bool), RequestFailure>
-where
-    H: Handler<A>,
-    A: Send + Sync + 'static,
-{
-    let config = limits.config;
-    let inspection = loop {
-        match inspect_request(read_buffer, config)? {
-            Some(inspection) => break inspection,
-            None => read_more(stream, read_buffer, config.max_request_head_bytes).await?,
-        }
-    };
-
-    // Reparse only the head to keep header descriptors on this task's stack.
-    let mut header_storage = [httparse::EMPTY_HEADER; MAX_REQUEST_HEADERS];
-    let mut parsed = httparse::Request::new(&mut header_storage);
-    let httparse::Status::Complete(head_len) = parsed
-        .parse(&read_buffer[..inspection.head_len])
-        .map_err(map_parse_error)?
-    else {
-        return Err(RequestFailure::BadRequest);
-    };
-    debug_assert_eq!(head_len, inspection.head_len);
-    let method = parsed.method.ok_or(RequestFailure::BadRequest)?;
-    let target = parsed.path.ok_or(RequestFailure::BadRequest)?;
-    let path = target.split_once('?').map_or(target, |(path, _)| path);
-    let prepared = handler.prepare(path, method);
-    observation.matched(prepared.metrics());
-    observation.set_api_log(prepared.api_log());
-    #[cfg(feature = "api-log")]
-    let (request_id, forwarded_for) = if prepared.api_log() {
-        let find = |name: &str| {
-            parsed
-                .headers
-                .iter()
-                .find(|header| header.name.eq_ignore_ascii_case(name))
-                .map(|header| header.value)
-        };
-        (find("x-request-id"), find("x-forwarded-for"))
-    } else {
-        (None, None)
-    };
-    observation.request_head(
-        method,
-        target,
-        peer_addr,
-        inspection.total_len - inspection.head_len,
-        #[cfg(feature = "api-log")]
-        (request_id, forwarded_for),
-        #[cfg(not(feature = "api-log"))]
-        (None, None),
-    );
-
-    let body_len = inspection.total_len - inspection.head_len;
-    // The permit is retained through handler completion. Responses cannot borrow
-    // a request body, so releasing it before socket writing is safe.
-    let _body_permit = reserve_request_body(limits.body_limit, body_len).await?;
-
-    // Keep any pipelined bytes in the header buffer; read exactly this body's
-    // remaining Content-Length into arena segments without growing that buffer.
-    let consumed = read_buffer.len().min(inspection.total_len);
-    // Inspection checks the body limit; the bounded copy preserves its boundary.
-    let mut writer = brz_io::Writer::new(&config.arena);
-    std::io::Write::write_all(&mut writer, &read_buffer[inspection.head_len..consumed])
-        .map_err(RequestFailure::Io)?;
-    let remaining = (inspection.total_len - consumed) as u64;
-    if remaining != 0 {
-        let copied = tokio::io::copy(&mut stream.take(remaining), &mut writer)
-            .await
-            .map_err(RequestFailure::Io)?;
-        if copied != remaining {
-            return Err(RequestFailure::Closed);
-        }
-    }
-    let body = writer.into_reader();
-
-    // The descriptors live on this connection task's stack while the handler
-    // awaits. Their names and values still borrow `read_buffer`, so request
-    // metadata requires no owned strings.
-    let mut request_header_storage = [Header {
-        name: "",
-        value: &[],
-    }; MAX_REQUEST_HEADERS];
-    for (destination, source) in request_header_storage.iter_mut().zip(parsed.headers.iter()) {
-        *destination = Header {
-            name: source.name,
-            value: source.value,
-        };
-    }
-    #[cfg(feature = "slow-log")]
-    observation.request_body(body.as_slice());
-    let mut request = Request::new(
-        method,
-        target,
-        &request_header_storage[..parsed.headers.len()],
-        &body,
-        peer_addr,
-        &config.arena,
-        #[cfg(feature = "api-log")]
-        observation.api_log_context(),
-    );
-    request.rejection_handler = config.rejection_handler;
-    let cors_origin = request.header("origin");
-    let preflight = config
-        .cors
-        .as_ref()
-        .and_then(|cors| cors.preflight(&request));
-    let mut response = if let Some(response) = preflight {
-        response
-    } else {
-        let response = handler
-            .call_prepared(request, authenticator, &prepared)
-            .await;
-        if let Some(cors) = &config.cors {
-            cors.apply(cors_origin, response, &config.arena)
-        } else {
-            response
-        }
-    };
-    if method == "HEAD" {
-        response.suppress_body();
-    }
-
-    if response.status().as_u16() > 599 {
-        return Ok((
-            Response::empty(StatusCode::INTERNAL_SERVER_ERROR).close(),
-            consumed,
-            false,
-        ));
-    }
-    Ok((response, consumed, inspection.keep_alive))
 }
 
 async fn reserve_request_body(
@@ -635,22 +547,11 @@ async fn reserve_request_body(
         .map_err(|_| RequestFailure::ServiceUnavailable)
 }
 
-fn inspect_request(
-    read_buffer: &[u8],
+fn inspect_parsed_request(
+    parsed: &httparse::Request<'_, '_>,
+    head_len: usize,
     config: &ServerConfig,
-) -> std::result::Result<Option<Inspection>, RequestFailure> {
-    if read_buffer.len() > config.max_request_head_bytes
-        && !read_buffer.windows(4).any(|window| window == b"\r\n\r\n")
-    {
-        return Err(RequestFailure::HeadersTooLarge);
-    }
-
-    let mut header_storage = [httparse::EMPTY_HEADER; MAX_REQUEST_HEADERS];
-    let mut parsed = httparse::Request::new(&mut header_storage);
-    let status = parsed.parse(read_buffer).map_err(map_parse_error)?;
-    let httparse::Status::Complete(head_len) = status else {
-        return Ok(None);
-    };
+) -> std::result::Result<Inspection, RequestFailure> {
     if head_len > config.max_request_head_bytes {
         return Err(RequestFailure::HeadersTooLarge);
     }
@@ -686,35 +587,11 @@ fn inspect_request(
     let total_len = head_len
         .checked_add(body_len)
         .ok_or(RequestFailure::BodyTooLarge)?;
-    Ok(Some(Inspection {
+    Ok(Inspection {
         head_len,
         total_len,
         keep_alive: !close,
-    }))
-}
-
-async fn read_more(
-    stream: &mut TcpStream,
-    read_buffer: &mut BytesMut,
-    limit: usize,
-) -> std::result::Result<(), RequestFailure> {
-    let Some(remaining) = limit.checked_sub(read_buffer.len()) else {
-        return Err(RequestFailure::BadRequest);
-    };
-    if remaining == 0 {
-        return Err(RequestFailure::BadRequest);
-    }
-    // Bound header buffering even if a socket read also returns body bytes.
-    // Any buffered body prefix is subsequently copied into arena segments.
-    let mut destination = (&mut *read_buffer).limit(remaining);
-    let read = stream
-        .read_buf(&mut destination)
-        .await
-        .map_err(RequestFailure::Io)?;
-    if read == 0 {
-        return Err(RequestFailure::Closed);
-    }
-    Ok(())
+    })
 }
 
 #[derive(Clone, Copy)]

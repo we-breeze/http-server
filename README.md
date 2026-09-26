@@ -6,9 +6,12 @@ have different connection ownership, lifecycle, and observability needs.
 
 ## Data path
 
-- Request line, headers, target, and query borrow the connection's header
-  buffer. Fixed-length bodies are collected into an arena-backed `brz_io::Writer`
-  under `max_request_body_bytes`, then frozen into a segmented `Reader`.
+- Socket reads append directly into arena-backed `brz_io::Reader` segments.
+  Request metadata borrows these segments; a header spanning segments is
+  coalesced only over its header range for `httparse`. Fixed-length bodies stay
+  in the same receive storage under `max_request_body_bytes`.
+- `Request::body_view()` borrows only the completed body's bounded range,
+  excluding headers and pipelined requests. This is not a streaming upload API.
 - JSON parameters use `brz_json::JsonReader` directly over the segments. Strings
   within one segment borrow it; cross-segment strings and decoded escapes use
   additional arena storage for that field. No intermediate `serde_json::Value`
@@ -20,9 +23,29 @@ have different connection ownership, lifecycle, and observability needs.
   and sends its unread portion. Owned bytes and download streams keep their
   existing write paths.
 
-The socket receive path includes copying into arena segments. Parsed headers
-and single-segment JSON strings need no extra payload copy; response segments
-are sent without concatenating the complete body.
+The receive path avoids a userspace scratch-buffer-to-body copy; ordinary
+socket reads still copy from the kernel. Single-segment fields borrow storage;
+cross-segment fields may be copied locally. API logs borrow retained header
+fields, and slow logs format at most 512 input bytes without merging the body.
+Response segments are sent without concatenating the complete body.
+
+The initial receive segment defaults to 2 KiB and is configurable through
+`initial_request_segment_bytes`. Once Content-Length is validated and body
+permits are acquired, up to `max_preallocated_request_body_bytes` remaining
+bytes (64 KiB by default, zero to disable) are reserved in one tail segment.
+Larger bodies grow incrementally but are fully received before dispatch.
+Empty keep-alive connections release receive segments. Arena exhaustion still
+falls back to the heap. Two segment descriptors and the owner of the first
+derived result fit inline. Cross-segment ranges and decoded data, such as escaped
+JSON strings, share that one retained slot; later results use heap owners.
+These bounds do not promise allocation-free requests or log backends.
+
+Routes are prepared before body reception for timeout observation and resolved
+again after reception to obtain safe borrowed captures. This currently costs
+two route lookups for a complete request.
+Malformed partial headers are rejected early with `httparse`. A partial header
+spanning segments uses a temporary bounded header copy, released before the
+next read, rather than retaining every growing prefix.
 
 Dependencies are pinned to `io v0.0.1`, `json v0.0.1`, and `metrics v0.0.2`
 through Git tags.

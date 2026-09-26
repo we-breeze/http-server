@@ -12,7 +12,7 @@ pub struct Request<'a> {
     method: &'a str,
     target: &'a str,
     headers: &'a [Header<'a>],
-    body: &'a brz_io::Reader,
+    body: brz_io::ReaderView<'a>,
     peer_addr: SocketAddr,
     response_arena: &'a EphemeralBytesArena,
     #[cfg(feature = "api-log")]
@@ -34,13 +34,25 @@ impl<'a> Request<'a> {
             method,
             target,
             headers,
-            body,
+            body: body.view(),
             peer_addr,
             response_arena,
             #[cfg(feature = "api-log")]
             api_log_context,
             rejection_handler: crate::rejection::default_rejection,
         }
+    }
+
+    pub(crate) fn with_body_view(mut self, body: brz_io::ReaderView<'a>) -> Self {
+        self.body = body;
+        self
+    }
+
+    /// Borrow this request's Body as bounded segments without coalescing it.
+    /// This is a view over an already received Body, not a streaming upload API.
+    #[must_use]
+    pub fn body_view(&self) -> brz_io::ReaderView<'a> {
+        self.body
     }
 
     /// HTTP method exactly as it appeared in the request line.
@@ -86,7 +98,7 @@ impl<'a> Request<'a> {
     }
 
     /// The complete fixed-length request body. A segmented body is merged on
-    /// first access and cached for this request. JSON extraction instead uses
+    /// demand; a small inline range cache avoids common repeated merges. JSON uses
     /// [`Self::json_body`] to borrow individual fields without merging the body.
     #[must_use]
     pub fn body(&self) -> &'a [u8] {
@@ -97,7 +109,7 @@ impl<'a> Request<'a> {
     /// Keep this holder alive while using borrowed fields, including across awaits.
     #[must_use]
     pub fn json_body(&self) -> brz_json::JsonReader<'a> {
-        brz_json::JsonReader::from_borrowed(self.body)
+        brz_json::JsonReader::from_view(self.body)
     }
 
     /// Remote peer accepted for this connection.
