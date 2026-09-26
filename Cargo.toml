@@ -13,9 +13,9 @@ resolver = "3"
 
 [dependencies]
 brz-metrics = { package = "brz-metrics", version = "=0.0.7", optional = true }
-brz-io = { package = "brz-io", version = "0.0.4" }
-brz-json = { package = "brz-json", version = "0.0.4" }
-brz-ds = { package = "brz-ds", version = "0.0.4", default-features = false }
+brz-io = { package = "brz-io", version = "0.0.5" }
+brz-json = { package = "brz-json", version = "0.0.5" }
+brz-ds = { package = "brz-ds", version = "0.0.5", default-features = false }
 bytes = "1"
 form_urlencoded = "1"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
