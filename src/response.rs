@@ -6,6 +6,9 @@ pub use http::StatusCode;
 
 /// An HTTP response body that can be written without a framework body copy.
 #[derive(Debug)]
+// Segmented responses transfer ownership without a new Box allocation. The
+// larger inline variant is intentional; include its size in task benchmarks.
+#[allow(clippy::large_enum_variant)]
 pub enum ResponseBody {
     Empty,
     Static(&'static [u8]),

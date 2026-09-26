@@ -1,7 +1,7 @@
 use std::io::{self, IoSlice};
 use std::time::Duration;
 
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use crate::{EphemeralBytes, EphemeralBytesArena, Response, ResponseBody};
@@ -14,32 +14,46 @@ pub(super) async fn write_response(
     idle_timeout: Duration,
 ) -> io::Result<()> {
     let head = encode_response_head(arena, &response, close);
-    if !response.sends_body() {
+    let sends_body = response.sends_body();
+    let mut body = std::mem::replace(response.body_mut(), ResponseBody::Empty);
+    // The encoded head owns the metadata now. Do not pin the original custom
+    // HeaderBlock (and its arena ticket) throughout a long download.
+    drop(response);
+    if !sends_body {
+        drop(body);
         return tokio::time::timeout(idle_timeout, socket.write_all(head.as_ref())).await?;
     }
-    if let ResponseBody::Segmented(body) = response.body_mut() {
+    if let ResponseBody::Segmented(reader) = &mut body {
         return tokio::time::timeout(idle_timeout, async {
-            socket.write_all(head.as_ref()).await?;
-            tokio::io::copy_buf(body, socket).await?;
+            let first = std::io::BufRead::fill_buf(reader)?;
+            write_all_vectored(socket, [head.as_ref(), first]).await?;
+            let written = first.len();
+            std::io::BufRead::consume(reader, written);
+            drop(head);
+            // Reader lends each subsequent segment; copy_buf does not merge it.
+            tokio::io::copy_buf(reader, socket).await?;
             Ok(())
         })
         .await?;
     }
-    let length = response.body().content_length();
-    let ResponseBody::Stream(body) = response.body_mut() else {
+    let length = body.content_length();
+    let ResponseBody::Stream(stream) = &mut body else {
         return tokio::time::timeout(
             idle_timeout,
-            write_all_vectored(socket, head.as_ref(), response.body().as_slice()),
+            write_all_vectored(socket, [head.as_ref(), body.as_slice()]),
         )
         .await?;
     };
     tokio::time::timeout(idle_timeout, socket.write_all(head.as_ref())).await??;
+    // With ordinary socket writes it is safe to reuse these bytes now.
+    // This must be revisited if kernel MSG_ZEROCOPY is ever introduced.
+    drop(head);
     let mut sent = 0_u64;
     loop {
         let finished = tokio::time::timeout(idle_timeout, async {
             // Empty upstream chunks are ignored without resetting the idle timer.
             let chunk = loop {
-                match body.next().await? {
+                match stream.next().await? {
                     Some(chunk) if chunk.is_empty() => {}
                     chunk => break chunk,
                 }
@@ -67,9 +81,9 @@ pub(super) async fn write_response(
                 ));
             }
             if length.is_none() {
-                let framing = format!("{:x}\r\n", chunk.len());
-                write_all_vectored(socket, framing.as_bytes(), &chunk).await?;
-                socket.write_all(b"\r\n").await?;
+                let mut framing = [0; CHUNK_HEAD_BYTES];
+                let framing = encode_chunk_head(chunk.len(), &mut framing);
+                write_all_vectored(socket, [framing, chunk.as_ref(), &b"\r\n"[..]]).await?;
             } else {
                 socket.write_all(&chunk).await?;
             }
@@ -172,32 +186,101 @@ fn encode_response_head(
     output.freeze()
 }
 
-async fn write_all_vectored(
-    stream: &mut TcpStream,
-    head: &[u8],
-    body: &[u8],
-) -> std::io::Result<()> {
-    let mut head_offset = 0;
-    let mut body_offset = 0;
-    while head_offset < head.len() || body_offset < body.len() {
-        let slices = [
-            IoSlice::new(&head[head_offset..]),
-            IoSlice::new(&body[body_offset..]),
-        ];
-        let written = stream.write_vectored(&slices).await?;
+const CHUNK_HEAD_BYTES: usize = 2 * std::mem::size_of::<usize>() + 2;
+
+fn encode_chunk_head(mut length: usize, output: &mut [u8; CHUNK_HEAD_BYTES]) -> &[u8] {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut offset = CHUNK_HEAD_BYTES - 2;
+    output[offset..].copy_from_slice(b"\r\n");
+    loop {
+        offset -= 1;
+        output[offset] = HEX[length & 15];
+        length >>= 4;
+        if length == 0 {
+            return &output[offset..];
+        }
+    }
+}
+
+async fn write_all_vectored<W: AsyncWrite + Unpin, const N: usize>(
+    stream: &mut W,
+    buffers: [&[u8]; N],
+) -> io::Result<()> {
+    let mut slices = buffers.map(IoSlice::new);
+    let mut remaining = &mut slices[..];
+    loop {
+        while remaining.first().is_some_and(|slice| slice.is_empty()) {
+            remaining = &mut remaining[1..];
+        }
+        if remaining.is_empty() {
+            return Ok(());
+        }
+        let written = stream.write_vectored(remaining).await?;
         if written == 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::WriteZero,
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
                 "failed to write complete HTTP response",
             ));
         }
-        let head_remaining = head.len() - head_offset;
-        if written < head_remaining {
-            head_offset += written;
-        } else {
-            head_offset = head.len();
-            body_offset += written - head_remaining;
+        IoSlice::advance_slices(&mut remaining, written);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+    use tokio::io::AsyncReadExt;
+
+    #[test]
+    fn chunk_lengths_match_lower_hex_without_a_string() {
+        for length in [0, 1, 15, 16, 255, 256, 8192, usize::MAX] {
+            let mut output = [0; CHUNK_HEAD_BYTES];
+            assert_eq!(
+                encode_chunk_head(length, &mut output),
+                format!("{length:x}\r\n").as_bytes()
+            );
         }
     }
-    Ok(())
+
+    #[tokio::test]
+    async fn vectored_write_handles_partial_progress_and_empty_slices() {
+        let (mut writer, mut reader) = tokio::io::duplex(2);
+        let mut output = [0; 10];
+        let write = write_all_vectored(&mut writer, [&b""[..], b"abc", b"", b"defghij", b""]);
+        let read = reader.read_exact(&mut output);
+        let (written, read) = tokio::join!(write, read);
+        written.unwrap();
+        read.unwrap();
+        assert_eq!(&output, b"abcdefghij");
+        write_all_vectored(&mut writer, [&b""[..]; 3])
+            .await
+            .unwrap();
+    }
+
+    struct ZeroWriter;
+    impl AsyncWrite for ZeroWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            _: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(Ok(0))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_zero_length_write_does_not_spin() {
+        let error = write_all_vectored(&mut ZeroWriter, [&b"x"[..]])
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::WriteZero);
+    }
 }
