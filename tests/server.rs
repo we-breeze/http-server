@@ -65,6 +65,7 @@ async fn read_to_close(stream: &mut TcpStream) -> Vec<u8> {
 #[test]
 fn default_limits_match_runtime_contract() {
     let config = ServerConfig::default();
+    assert_eq!(config.initial_request_segment_bytes, 2 * 1024);
     assert_eq!(config.max_connections, 65_536);
     assert_eq!(config.max_request_body_bytes, 8 * 1024 * 1024);
     assert_eq!(config.max_in_flight_request_body_bytes, 64 * 1024 * 1024);

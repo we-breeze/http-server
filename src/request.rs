@@ -97,9 +97,9 @@ impl<'a> Request<'a> {
             .map(|header| header.value)
     }
 
-    /// The complete fixed-length request body. A segmented body is merged on
-    /// demand; a small inline range cache avoids common repeated merges. JSON uses
-    /// [`Self::json_body`] to borrow individual fields without merging the body.
+    /// The complete fixed-length request body. A segmented body is merged once
+    /// on demand and cached. JSON uses [`Self::json_body`] to borrow individual
+    /// fields without merging the body.
     #[must_use]
     pub fn body(&self) -> &'a [u8] {
         self.body.as_slice()

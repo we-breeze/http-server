@@ -142,7 +142,7 @@ fn main() {
         .fold(Router::default(), Router::merge);
     let _ = flat.prepare("/api/group-0000/status", "GET");
     println!("Routing + metric selection only; median ns/op; no I/O or handler Future invocation.");
-    println!("case\tlegacy(24 APIs)\tbuckets(24 APIs)");
+    println!("case\tlegacy(24 APIs)\tshared-index(24 APIs)");
     for (case, path) in [
         ("static-first", "/api/group-0000/status"),
         ("static-last", "/api/group-0023/status"),
@@ -163,7 +163,7 @@ fn main() {
             .fold(Router::default(), Router::merge);
         let path = format!("/api/group-{:04}/123", count - 1);
         println!(
-            "buckets({count} APIs), parameter-last\t{:.0}",
+            "shared-index({count} APIs), parameter-last\t{:.0}",
             measure(&flat, &path)
         );
     }
@@ -172,7 +172,7 @@ fn main() {
         .fold(Router::default(), Router::merge);
     let _ = suffix.prepare("/api/123/action-0511", "GET");
     println!(
-        "buckets(512 APIs), literal-suffix-last\t{:.0}",
+        "shared-index(512 APIs), literal-suffix-last\t{:.0}",
         measure(&suffix, "/api/123/action-0511")
     );
 }

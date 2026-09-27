@@ -419,7 +419,8 @@ where
     H: Handler<A>,
     A: Send + Sync + 'static,
 {
-    // No separate BytesMut payload. The two common descriptor slots are inline;
+    // No separate BytesMut payload. The first descriptor is inline and a
+    // predictable second descriptor shares storage with the overflow queue;
     // segment payloads are allocated on demand from the process-shared arena.
     let read_buffer = brz_io::Writer::with_initial_segment_size(
         &config.arena,

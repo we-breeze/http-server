@@ -13,9 +13,9 @@ use index::{RegisteredRoute, RouteIndex};
 
 /// Composes API instances without growing the handler or future type.
 ///
-/// Routes are indexed once before serving. Static paths use byte-length buckets;
-/// parameter paths use segment-count and final-literal buckets. Only the selected
-/// handler's future is boxed. Each API retains its own application state.
+/// Routes are compiled into the shared `brz-http-router` index on first use.
+/// Only the selected handler's future is boxed. Each API retains its own
+/// application state.
 pub struct Router<A: Send + Sync + 'static = NoAuthenticator> {
     handlers: Vec<Box<dyn ErasedHandler<A>>>,
     routes: Vec<RegisteredRoute>,

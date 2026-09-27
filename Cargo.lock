@@ -51,10 +51,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "brz-http-router"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5c6ecd0c1e45eff33195af14ee7d599ab4ec9c37cd18ed458c0029cfaf6e49c"
+dependencies = [
+ "http",
+ "percent-encoding",
+ "thiserror",
+]
+
+[[package]]
 name = "brz-http-server"
 version = "0.0.22"
 dependencies = [
  "brz-ds",
+ "brz-http-router",
  "brz-http-server-macros",
  "brz-io",
  "brz-json",
@@ -88,9 +100,9 @@ dependencies = [
 
 [[package]]
 name = "brz-io"
-version = "0.0.5"
+version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19a29cf34ad05eb5eb11d3065c31a27e45697499ca50ed8307a31ef2509c0b1b"
+checksum = "5ce95cb60641fdf3e8884cba56854e6a6eb9db355dc0c7837ad12b94086dbd43"
 dependencies = [
  "brz-ds",
  "elsa",
@@ -99,9 +111,9 @@ dependencies = [
 
 [[package]]
 name = "brz-json"
-version = "0.0.5"
+version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43cf896784b1121879010ffb26c2aad4c31b4b16a6bc382b7509c41ad5f184f5"
+checksum = "a5224add2ff6a2b44d860590997a1726d768dac72a100a462333f943cee787d5"
 dependencies = [
  "brz-io",
  "serde",

@@ -35,9 +35,10 @@ permits are acquired, up to `max_preallocated_request_body_bytes` remaining
 bytes (64 KiB by default, zero to disable) are reserved in one tail segment.
 Larger bodies grow incrementally but are fully received before dispatch.
 Empty keep-alive connections release receive segments. Arena exhaustion still
-falls back to the heap. Two segment descriptors and the owner of the first
-derived result fit inline. Cross-segment ranges and decoded data, such as escaped
-JSON strings, share that one retained slot; later results use heap owners.
+falls back to the heap. The first segment descriptor is inline; a predictable
+second descriptor shares storage with the overflow queue, which allocates only
+for a third segment. Cross-segment ranges and decoded data, such as escaped JSON
+strings, use stable heap owners and remain cached for repeated reads.
 These bounds do not promise allocation-free requests or log backends.
 
 Routes are prepared before body reception for timeout observation and resolved
