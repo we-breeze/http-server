@@ -63,7 +63,7 @@ dependencies = [
 
 [[package]]
 name = "brz-http-server"
-version = "0.0.22"
+version = "0.0.23"
 dependencies = [
  "brz-ds",
  "brz-http-router",
@@ -90,7 +90,7 @@ dependencies = [
 
 [[package]]
 name = "brz-http-server-macros"
-version = "0.0.22"
+version = "0.0.23"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
