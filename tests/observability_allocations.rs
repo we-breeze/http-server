@@ -152,7 +152,7 @@ fn large_segmented_body_excerpt_does_not_allocate_or_consume_body() {
     });
     assert_eq!(
         allocations, 0,
-        "the excerpt must not trigger the contiguous body cache"
+        "the excerpt must not merge the complete body"
     );
     assert!(sink.0 <= 512);
     assert_eq!(body.len(), payload.len());

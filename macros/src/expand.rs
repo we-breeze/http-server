@@ -204,7 +204,6 @@ fn expand_adapter(
         .iter()
         .map(|group| {
             let path = &group.path;
-            let program = route_program(path, &server);
             let methods = group
                 .endpoints
                 .iter()
@@ -231,7 +230,7 @@ fn expand_adapter(
                             ::std::sync::LazyLock::new(|| #server::ApiMetrics::new(#path));
                         *METRICS
                     },
-                    program: Some(#program),
+                    program: None,
                 }
             }
         })
@@ -349,35 +348,6 @@ fn expand_adapter(
             }
         }
     })
-}
-
-fn route_program(path: &str, server: &TokenStream2) -> TokenStream2 {
-    let segments = path.split('/').count();
-    let literals = path
-        .split('/')
-        .enumerate()
-        .filter(|(_, segment)| !segment.starts_with(':') && !segment.starts_with('*'))
-        .map(|(position, segment)| {
-            let literal = LitStr::new(segment, proc_macro2::Span::call_site());
-            quote! { (#position, #literal) }
-        });
-    let parameters = path
-        .split('/')
-        .enumerate()
-        .filter(|(_, segment)| segment.starts_with(':'))
-        .map(|(position, _)| position);
-    let catch_all = path
-        .split('/')
-        .position(|segment| segment.starts_with('*'))
-        .map_or_else(|| quote! { None }, |position| quote! { Some(#position) });
-    quote! {
-        #server::__private::RouteProgram {
-            segments: #segments,
-            literals: &[#(#literals),*],
-            parameters: &[#(#parameters),*],
-            catch_all: #catch_all,
-        }
-    }
 }
 
 fn route_attribute(attributes: &[Attribute]) -> Option<(&'static str, usize)> {
