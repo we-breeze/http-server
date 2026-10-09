@@ -51,6 +51,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "brz-http-cors"
+version = "0.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de66d8ce67cbc3157b9b96a70602f114612421b30a4b75f9596f0210352430ba"
+dependencies = [
+ "http",
+]
+
+[[package]]
 name = "brz-http-router"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -66,6 +75,7 @@ name = "brz-http-server"
 version = "0.0.23"
 dependencies = [
  "brz-ds",
+ "brz-http-cors",
  "brz-http-router",
  "brz-http-server-macros",
  "brz-io",

@@ -257,7 +257,7 @@ where
     let preflight = config
         .cors
         .as_ref()
-        .and_then(|cors| cors.preflight(&request));
+        .and_then(|cors| crate::cors::preflight(cors, &request));
     let mut response = if let Some(response) = preflight {
         response
     } else {
@@ -265,7 +265,7 @@ where
             .call_prepared(request, authenticator, &prepared)
             .await;
         if let Some(cors) = &config.cors {
-            cors.apply(origin, response, &config.arena)
+            response.apply_cors(cors, origin, &config.arena)
         } else {
             response
         }
