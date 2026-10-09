@@ -19,7 +19,11 @@ use tokio::{
 
 brz_http_server::registry!(dependencies(calls: Arc<AtomicUsize>));
 brz_http_server::registry!(group = shards, dependencies(number: usize));
-brz_http_server::registry!(group = private, dependencies(value: &'static str), auth = Auth);
+brz_http_server::registry!(
+    group = private,
+    dependencies(value: &'static str),
+    auth = Auth
+);
 
 #[brz_http_server::get("/users/byname", access = public)]
 async fn byname(#[inject(calls)] calls: &AtomicUsize) -> Text {

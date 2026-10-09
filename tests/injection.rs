@@ -34,13 +34,15 @@ impl CloneProbe {
     }
 }
 
-brz_http_server::registry!(dependencies(
-    state: AppState,
-    primary: StoreHandle,
-    replica: StoreHandle,
-    probe: CloneProbe,
-    r#type: u32,
-));
+brz_http_server::registry!(
+    dependencies(
+        state: AppState,
+        primary: StoreHandle,
+        replica: StoreHandle,
+        probe: CloneProbe,
+        r#type: u32,
+    )
+);
 
 #[derive(Deserialize)]
 struct Input<'a> {
