@@ -358,6 +358,18 @@ default limits and a server-owned arena with two 16 MiB chunks (32 MiB total).
 Use the corresponding `_with_config` / `_and_config` entrypoint when setting
 application policies such as CORS or validation error mapping.
 
+`brz_http_server::Cors` reexports the shared `brz-http-cors` policy. Existing
+`ServerConfig { cors: Some(policy), ..Default::default() }` configuration remains
+available. Preflights are answered before authentication and handler dispatch,
+without requiring an OPTIONS handler. Ordinary OPTIONS requests keep normal
+dispatch. Response CORS fields are replaced according to the policy while
+preserving existing Vary values and repeated unrelated response headers.
+If an outer `brz-http-gateway` enables CORS, leave it disabled on the inner
+server so the public boundary owns the policy.
+
+The shared policy is a pinned registry dependency; a sibling checkout is not
+required to build or publish this package.
+
 Defaults are a 15 second request timeout and an 8 MiB fixed-length request-body
 limit. At most 64 MiB of request bodies may be retained across concurrent
 handlers; set `ServerConfig::max_in_flight_request_body_bytes` when an upload

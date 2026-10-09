@@ -18,7 +18,11 @@ struct AppState {
 brz_http_server::registry!(dependencies(state: Arc<AppState>));
 brz_http_server::registry!(group = empty_apis, dependencies(state: Arc<AppState>));
 brz_http_server::registry!(group = alternate_apis, dependencies(label: &'static str));
-brz_http_server::registry!(group = authenticated_apis, dependencies(label: &'static str), auth = TokenAuth);
+brz_http_server::registry!(
+    group = authenticated_apis,
+    dependencies(label: &'static str),
+    auth = TokenAuth
+);
 brz_http_server::registry!(group = duplicate_apis);
 brz_http_server::registry!(group = split_method_apis);
 brz_http_server::registry!(group = crossing_apis);

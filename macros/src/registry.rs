@@ -174,9 +174,12 @@ pub(crate) fn collect(input: TokenStream) -> TokenStream {
         dependencies,
         registry,
     } = parse_macro_input!(input as CollectArguments);
-    let fields = dependencies
-        .iter()
-        .map(|(name, value)| quote!(#name: #value));
+    let fields = dependencies.iter().map(|(name, value)| match value {
+        // Keep the value's span for identifier resolution when the input
+        // was itself produced by a macro with a different field-name span.
+        Expr::Path(path) if path.qself.is_none() && path.path.is_ident(name) => quote!(#value),
+        _ => quote!(#name: #value),
+    });
     quote!(#registry::handlers(#registry::Dependencies { #(#fields),* })).into()
 }
 

@@ -187,6 +187,38 @@ impl Response {
         self.status.as_u16() >= 200 && !matches!(self.status.as_u16(), 204 | 304)
     }
 
+    pub(crate) fn apply_cors(
+        mut self,
+        cors: &crate::Cors,
+        origin: Option<&[u8]>,
+        arena: &crate::EphemeralBytesArena,
+    ) -> Self {
+        if origin.is_none() {
+            return self;
+        }
+        let mut headers = http::HeaderMap::new();
+        if let Some(block) = &self.headers {
+            for line in block.as_slice().split(|byte| *byte == b'\n') {
+                let line = line.strip_suffix(b"\r").unwrap_or(line);
+                if line.is_empty() {
+                    continue;
+                }
+                let Some(colon) = line.iter().position(|byte| *byte == b':') else {
+                    return Self::conversion_failure();
+                };
+                let name = http::HeaderName::from_bytes(&line[..colon]);
+                let value = http::HeaderValue::from_bytes(&line[colon + 1..]);
+                let (Ok(name), Ok(value)) = (name, value) else {
+                    return Self::conversion_failure();
+                };
+                headers.append(name, value);
+            }
+        }
+        cors.apply(origin, &mut headers);
+        self.headers = None;
+        self.with_http_headers(&headers, arena)
+    }
+
     pub(crate) fn with_http_headers(
         mut self,
         headers: &http::HeaderMap,
