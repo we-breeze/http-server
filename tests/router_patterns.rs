@@ -24,11 +24,7 @@ macro_rules! fixture_api {
         mod $name {
             use super::*;
             brz_http_server::registry!(dependencies(calls: Arc<AtomicUsize>));
-            #[brz_http_server::get(
-                                $path,
-                                access = public,
-                                group = crate::$name::http_apis
-                            )]
+            #[brz_http_server::get($path, access = public, group = crate::$name::http_apis)]
             async fn read(
                 #[inject(calls)] calls: &AtomicUsize,
                 $parameter: $ty,
