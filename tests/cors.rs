@@ -61,6 +61,8 @@ async fn request(cors: Option<Cors>, head: &str) -> (String, usize) {
 fn policy() -> Cors {
     Cors {
         allow_credentials: true,
+        expose_headers: vec!["X-Request-ID".into()],
+        extra_preflight_vary: vec!["X-Preflight-Variant".into()],
         ..Cors::permissive()
     }
 }
@@ -83,6 +85,13 @@ async fn shared_preflight_runs_before_the_handler() {
     assert!(response.starts_with("HTTP/1.1 200"));
     assert!(response.ends_with("OK"));
     assert_eq!(calls, 0);
+    assert!(values(&response, "access-control-expose-headers").is_empty());
+    assert_eq!(
+        values(&response, "vary"),
+        [
+            "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, X-Preflight-Variant"
+        ]
+    );
     assert_eq!(
         values(&response, "access-control-allow-origin"),
         ["https://app.example"]
@@ -107,6 +116,10 @@ async fn actual_response_merges_vary_and_replaces_cors_without_losing_cookies() 
         ["https://app.example"]
     );
     assert_eq!(values(&response, "vary"), ["Accept-Encoding", "Origin"]);
+    assert_eq!(
+        values(&response, "access-control-expose-headers"),
+        ["X-Request-ID"]
+    );
     assert_eq!(values(&response, "set-cookie"), ["a=1", "b=2"]);
 }
 
