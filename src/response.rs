@@ -193,9 +193,6 @@ impl Response {
         origin: Option<&[u8]>,
         arena: &crate::EphemeralBytesArena,
     ) -> Self {
-        if origin.is_none() {
-            return self;
-        }
         let mut headers = http::HeaderMap::new();
         if let Some(block) = &self.headers {
             for line in block.as_slice().split(|byte| *byte == b'\n') {
