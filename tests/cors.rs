@@ -124,6 +124,24 @@ async fn actual_response_merges_vary_and_replaces_cors_without_losing_cookies() 
 }
 
 #[tokio::test]
+async fn responses_without_origin_merge_vary_only_when_cors_is_enabled() {
+    for enabled in [true, false] {
+        let (response, calls) = request(enabled.then(policy), "GET / HTTP/1.1").await;
+        assert!(response.ends_with("handler"));
+        assert_eq!(calls, 1);
+        let expected = if enabled {
+            vec!["Accept-Encoding", "Origin"]
+        } else {
+            vec!["Accept-Encoding"]
+        };
+        assert_eq!(values(&response, "vary"), expected);
+        assert_eq!(values(&response, "set-cookie"), ["a=1", "b=2"]);
+        assert!(values(&response, "access-control-allow-credentials").is_empty());
+        assert!(values(&response, "access-control-expose-headers").is_empty());
+    }
+}
+
+#[tokio::test]
 async fn plain_options_and_disabled_cors_reach_the_handler() {
     for (cors, head) in [
         (
