@@ -280,6 +280,9 @@ where
             false,
         ));
     }
+    if config.export_cors_policy {
+        response = response.export_cors_policy(&config.arena);
+    }
     Ok((response, inspection.total_len, inspection.keep_alive))
 }
 
