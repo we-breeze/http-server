@@ -42,6 +42,7 @@ pub use api_metrics::ApiMetrics;
 pub use auth::{AuthFailure, AuthRequest, Authenticator, NoAuthenticator};
 pub use body::{Body, BodyError, Form, Multipart, Upload};
 pub use brz_ds::{EphemeralBytes, EphemeralBytesArena, EphemeralBytesMut};
+pub use brz_http_cors::ResponseCors;
 pub use bytes::Bytes;
 pub use cors::Cors;
 pub use error::{Error, Result};

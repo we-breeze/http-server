@@ -121,6 +121,9 @@ pub struct ServerConfig {
     pub max_preallocated_request_body_bytes: usize,
     /// Origin policy; absent when the application does not expose cross-origin APIs.
     pub cors: Option<crate::Cors>,
+    /// Export response-local CORS decisions to an explicitly trusted internal
+    /// HTTP gateway. Keep false on public listeners; default is false.
+    pub export_cors_policy: bool,
     /// Application mapping for failed parameter bindings.
     pub rejection_handler: crate::RejectionHandler,
     /// Maximum simultaneously accepted TCP connections.
@@ -158,6 +161,7 @@ impl ServerConfig {
             initial_request_segment_bytes: 2 * 1024,
             max_preallocated_request_body_bytes: 64 * 1024,
             cors: None,
+            export_cors_policy: false,
             rejection_handler: crate::rejection::default_rejection,
             max_connections: 65_536,
             max_request_head_bytes: 32 * 1024,

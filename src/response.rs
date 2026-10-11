@@ -108,6 +108,7 @@ pub struct Response {
     close: bool,
     suppress_body: bool,
     conversion_failed: bool,
+    cors_policy: crate::ResponseCors,
 }
 
 impl Response {
@@ -123,6 +124,7 @@ impl Response {
             close: false,
             suppress_body: false,
             conversion_failed: false,
+            cors_policy: crate::ResponseCors::Apply,
         }
     }
 
@@ -154,6 +156,29 @@ impl Response {
             self.status = status;
         }
         self
+    }
+
+    /// Render this response outside the configured CORS boundary. This also
+    /// skips adding Vary: Origin; status codes alone never disable CORS.
+    #[must_use]
+    pub fn without_cors(mut self) -> Self {
+        self.cors_policy = crate::ResponseCors::Skip;
+        self
+    }
+
+    /// The application's explicit response-local CORS decision.
+    #[must_use]
+    pub fn cors_policy(&self) -> crate::ResponseCors {
+        self.cors_policy
+    }
+
+    pub(crate) fn export_cors_policy(self, arena: &crate::EphemeralBytesArena) -> Self {
+        let Some(value) = self.cors_policy.header_value() else {
+            return self;
+        };
+        let mut headers = http::HeaderMap::new();
+        headers.insert(brz_http_cors::RESPONSE_CORS_HEADER, value);
+        self.with_http_headers(&headers, arena)
     }
 
     pub(crate) fn conversion_failure() -> Self {
@@ -193,6 +218,9 @@ impl Response {
         origin: Option<&[u8]>,
         arena: &crate::EphemeralBytesArena,
     ) -> Self {
+        if self.cors_policy == crate::ResponseCors::Skip {
+            return self;
+        }
         let mut headers = http::HeaderMap::new();
         if let Some(block) = &self.headers {
             for line in block.as_slice().split(|byte| *byte == b'\n') {

@@ -367,6 +367,21 @@ preserving existing Vary values and repeated unrelated response headers.
 If an outer `brz-http-gateway` enables CORS, leave it disabled on the inner
 server so the public boundary owns the policy.
 
+Use `Response::without_cors()` for a response explicitly rendered outside the
+application's normal CORS boundary, for example by an outer unhandled-exception
+handler. It skips both access-control headers and Vary: Origin while preserving
+the status, body, existing Vary and unrelated headers. Ordinary errors, including
+business 500 responses, continue to use CORS. Preflights remain policy-owned.
+
+The decision is local by default and adds no transport header. For a private
+HTTP origin behind Breeze's gateway, set `ServerConfig::export_cors_policy` to
+true and construct its matched `OriginService` with `with_response_cors()`.
+This explicitly enables the reserved `x-breeze-response-cors: skip` response
+metadata on that internal hop; the gateway consumes it before public delivery.
+An in-memory response extension alone cannot cross a separate HTTP connection.
+Keep export disabled on public servers, and enable gateway trust only for
+controlled internal origins. Client request headers cannot choose this policy.
+
 The shared policy is a pinned registry dependency; a sibling checkout is not
 required to build or publish this package.
 
