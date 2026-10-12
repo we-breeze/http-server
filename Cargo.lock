@@ -121,20 +121,34 @@ dependencies = [
 
 [[package]]
 name = "brz-json"
-version = "0.0.6"
+version = "0.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5224add2ff6a2b44d860590997a1726d768dac72a100a462333f943cee787d5"
+checksum = "536160f5a05879db5a4caca9b4cae8c35a90383b620c15c09df5fe6ba44b21ef"
 dependencies = [
  "brz-io",
+ "brz-json-macros",
  "serde",
  "serde_json",
+ "serde_path_to_error",
+]
+
+[[package]]
+name = "brz-json-macros"
+version = "0.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48ccb6facb728c119ab428910bae4e0f789259cffe4577ac999d9d75e6b67dc4"
+dependencies = [
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
 name = "brz-metrics"
-version = "0.0.7"
+version = "0.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6df4b5e9065aeb2d33e7568cbce6b356acb569f6904601097c327024ff94278"
+checksum = "1b24ea1df27696520fb70aff4ef3e053dc1e0da90344b3954c79debd601de85b"
 dependencies = [
  "ahash",
  "arc-swap",
@@ -537,11 +551,23 @@ version = "1.0.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
 dependencies = [
+ "indexmap",
  "itoa",
  "memchr",
  "serde",
  "serde_core",
  "zmij",
+]
+
+[[package]]
+name = "serde_path_to_error"
+version = "0.1.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10a9ff822e371bb5403e391ecd83e182e0e77ba7f6fe0160b795797109d1b457"
+dependencies = [
+ "itoa",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
