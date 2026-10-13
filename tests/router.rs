@@ -203,14 +203,11 @@ async fn prepares_before_body_and_dispatches_static_parameters_and_wildcards() {
     assert_eq!(invoked.load(Ordering::Relaxed), 8);
     #[cfg(feature = "metrics")]
     {
-        let mut recorded = false;
-        brz_metrics::visit(|name, kind, snapshot| {
-            if kind == "APITO" && name == "/users/:id" {
-                recorded = snapshot.total >= 1;
-            }
-        });
+        let recorded =
+            brz_metrics::CounterMetric::new(brz_metrics::MetricType::ApiTimeout, "/users/:id")
+                .get();
         assert!(
-            recorded,
+            recorded >= 1,
             "body-read timeout must retain the matched route's metrics"
         );
     }

@@ -66,7 +66,7 @@ impl<'p> PreparedRoute<'p> {
 
     #[must_use]
     pub fn metrics(&self) -> Option<ApiMetrics> {
-        self.metric.map(|(_, metric)| metric)
+        self.metric.as_ref().map(|(_, metric)| metric.clone())
     }
 
     #[must_use]
@@ -102,8 +102,8 @@ impl<'p> PreparedRoute<'p> {
             }
         } else if self.target.is_none() {
             if let Some((priority, _)) = metric {
-                if self.metric.is_none_or(|(current, _)| {
-                    priority > current || (priority == current && handler < self.metric_owner)
+                if self.metric.as_ref().is_none_or(|(current, _)| {
+                    priority > *current || (priority == *current && handler < self.metric_owner)
                 }) {
                     self.metric = metric;
                     self.metric_owner = handler;

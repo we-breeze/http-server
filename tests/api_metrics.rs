@@ -46,10 +46,9 @@ fn snapshots() -> BTreeMap<String, MetricSnapshot> {
     let mut metrics = BTreeMap::new();
     brz_metrics::visit(|name, kind, snapshot| {
         if name.starts_with("/metric-test/") {
-            assert!(
-                matches!(kind, "API" | "API3XX" | "API4XX" | "API5XX" | "APITO"),
-                "unexpected API metric type {kind}",
-            );
+            if kind != "API" {
+                return;
+            }
             metrics.insert(format!("{kind} {name}"), snapshot);
         }
     });
@@ -65,9 +64,9 @@ async fn send(address: SocketAddr, method: &str, path: &str) -> u16 {
 }
 
 #[tokio::test]
-async fn exported_routes_have_fixed_api_metrics_for_final_status_classes() {
+async fn exported_routes_count_all_statuses_and_timeouts_once() {
     let config = ServerConfig {
-        request_timeout: Duration::from_millis(100),
+        request_timeout: Duration::from_millis(250),
         ..ServerConfig::default()
     };
     let handler = brz_http_server::handlers!().unwrap();
@@ -114,25 +113,60 @@ async fn exported_routes_have_fixed_api_metrics_for_final_status_classes() {
     assert_eq!(send(address, "GET", "/unmatched-metric-test").await, 404);
 
     let metrics = snapshots();
-    assert_eq!(metrics.len(), paths.len() * 5);
-    for (kind, count) in [("API", 4), ("API3XX", 3), ("API4XX", 4), ("API5XX", 3)] {
-        let value = metrics[&format!("{kind} /metric-test/:code")];
-        assert_eq!(value.total, count, "{kind}");
-        assert_eq!(
-            value.failure,
-            if kind == "API4XX" || kind == "API5XX" {
-                count
-            } else {
-                0
-            },
-        );
+    assert_eq!(metrics.len(), paths.len());
+    let value = metrics["API /metric-test/:code"];
+    assert_eq!(value.total, 14);
+    assert_eq!(value.success, 7);
+    assert_eq!(value.failure, 7);
+    for route in ["secure", "slow", "invalid-json"] {
+        let value = metrics[&format!("API /metric-test/{route}")];
+        assert_eq!(value.total, 1, "{route}");
+        assert_eq!(value.failure, 1, "{route}");
     }
-    assert_eq!(metrics["API4XX /metric-test/secure"].total, 1);
-    assert_eq!(metrics["API4XX /metric-test/slow"].total, 0);
-    assert_eq!(metrics["APITO /metric-test/slow"].total, 1);
-    assert_eq!(metrics["API5XX /metric-test/invalid-json"].total, 1);
-    assert_eq!(metrics["API3XX /metric-test/special"].total, 1);
-    assert_eq!(metrics["API4XX /metric-test/special"].total, 1);
+    let timeout = metrics["API /metric-test/slow"];
+    assert_eq!(timeout.slow, 1);
+    assert_eq!(timeout.elapsed_us, timeout.failure_elapsed_us);
+    assert_eq!(timeout.elapsed_us, timeout.slow_elapsed_us);
+    let value = metrics["API /metric-test/special"];
+    assert_eq!(value.total, 2);
+    assert_eq!(value.success, 1);
+    assert_eq!(value.failure, 1);
+    let mut output = String::new();
+    std::io::Read::read_to_string(&mut brz_metrics::PrometheusReader::new(), &mut output).unwrap();
+    assert!(!output.contains("status_class="));
+    assert!(!output.contains("type=\"API5XX\""));
+    for (code, count) in [
+        (200, 1),
+        (201, 1),
+        (204, 1),
+        (299, 1),
+        (300, 1),
+        (304, 1),
+        (399, 1),
+        (400, 2),
+        (405, 1),
+        (499, 1),
+        (500, 2),
+        (599, 1),
+    ] {
+        let sample = format!(
+            "brz_api_resp_total{{type=\"API\",name=\"/metric-test/:code\",status_code=\"{code}\"}} {count}\n"
+        );
+        assert!(output.contains(&sample), "missing {sample}");
+    }
+    assert!(!output.contains("status_code=\"600\""));
+    assert!(output.contains(
+        "brz_api_resp_total{type=\"API\",name=\"/metric-test/slow\",status_code=\"408\"} 1\n"
+    ));
+    assert!(output.contains("brz_api_timeout_total{type=\"API\",name=\"/metric-test/slow\"} 1\n"));
+    assert!(!output.contains("status_code=\"203\""));
+    let again = {
+        let mut bytes = String::new();
+        std::io::Read::read_to_string(&mut brz_metrics::PrometheusReader::new(), &mut bytes)
+            .unwrap();
+        bytes
+    };
+    assert_eq!(again, output);
     tx.send(()).unwrap();
     task.await.unwrap().unwrap();
 }

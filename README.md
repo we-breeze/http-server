@@ -48,8 +48,8 @@ Malformed partial headers are rejected early with `httparse`. A partial header
 spanning segments uses a temporary bounded header copy, released before the
 next read, rather than retaining every growing prefix.
 
-Dependencies are pinned to `io v0.0.1`, `json v0.0.1`, and `metrics v0.0.2`
-through Git tags.
+Dependencies use crates.io releases; the optional metrics dependency is pinned
+to `brz-metrics =0.0.9` so one registry is shared with other Breeze SDKs.
 
 ## Transport scope
 
@@ -320,35 +320,55 @@ raw body access remains available after parsing, including on rejection paths.
 The `metrics` feature enables route metrics and the `brz-metrics` dependency.
 Without it, metric recording compiles out.
 
-Exported function routes lazily register five `brz-metrics` entries when the
-route first matches. The route template remains the metric name while the
-status class is represented by the metric type:
+Exported function routes lazily register one `brz-metrics` entry when the
+route first matches, with type `API` and the route template as its name:
 
 ```text
-API    /users/:id
-API3XX /users/:id
-API4XX /users/:id
-API5XX /users/:id
-APITO  /users/:id
+API /users/:id
 ```
 
-Classes cover 200–299, 300–399, 400–499, and 500–599 inclusively. Different IDs
-and query strings share the template's slots; methods on the same template and
-repeated server registrations also share them. Unused classes are registered
-with zero counts. There is no per-request metric-name allocation or registration
-after the route's metric handles have initialized.
+This entry counts **all observed requests**, including 2xx, 3xx, 4xx, 5xx,
+and timeouts. Responses below 400 are successful; 4xx, 5xx, and timeouts are
+errors. A timeout contributes once to the total and error groups. Slow requests
+use the service policy (200 ms), including slow errors. Each route exposes six cumulative Prometheus
+counters through the new metrics reader: counts and duration sums for all,
+failed, and slow requests.
 
-The `APITO` row records the configured request timeout and is not also counted
-as `API4XX`. Other counters record the final response status once, before socket writing. They
-include authentication/extraction rejections, matched-path 405 responses,
+Actual HTTP response codes are preserved in a separate count-only metric:
+
+```text
+brz_api_resp_total{type="API",name="/users/:id",status_code="503"} 12
+```
+
+There is no status-class label or `API5XX` type. Code-specific handles are created
+only when that code is first observed; later observations use a sparse `OnceLock`
+cache without registration locks. Each observed code adds one time series, rather
+than six. `brz_api_timeout_total` separately counts timeouts. A timeout response
+also increments its actual status-code counter (for example 408), while the overall
+request and error counts are incremented only once. `ApiMetrics` is now `Clone` rather
+than `Copy`, sharing its status cache between observations.
+
+Different IDs and query strings share the template's slot; methods on the same
+template and repeated server registrations also share it. There is no per-request
+metric-name allocation or registration after the handle has initialized.
+
+The metric records the final response status once, before socket writing. It
+includes authentication/extraction rejections, matched-path 405 responses,
 serialization failures, and body/handler timeouts after route identification.
-Latency spans route identification through response construction, with the
-existing service policy (200 ms slow threshold); 4xx and 5xx also increment
-`error_count`. Download completion and socket-write errors are not a second API
-observation. Unknown routes, failures before route identification, and closed
-connections producing no response do not create API entries.
+Latency spans route identification through response construction. Download
+completion and socket-write errors are not a second API observation. Unknown
+routes, failures before route identification, and closed connections producing
+no response do not create API entries.
 
-The metrics dependency is pinned to the Git tag `v0.0.2`.
+The manifest currently pins `brz-metrics` to version `0.0.9`. The cumulative
+Prometheus reader is developed in the sibling metrics checkout; validate the
+combined changes using Cargo's local dependency patch until that metrics change
+is published and the pinned dependency is upgraded:
+
+```sh
+cargo test --all-features --test api_metrics \
+  --config 'patch.crates-io.brz-metrics.path="../metrics"'
+```
 
 ## Usage
 

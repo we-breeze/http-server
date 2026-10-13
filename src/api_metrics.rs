@@ -3,66 +3,93 @@ use std::time::{Duration, Instant};
 
 #[cfg(feature = "api-log")]
 use std::fmt::Write as _;
-#[cfg(feature = "api-log")]
+#[cfg(any(feature = "api-log", feature = "metrics"))]
 use std::sync::OnceLock;
 
 #[cfg(feature = "api-log")]
 use brz_ds::SmolStr;
 #[cfg(feature = "metrics")]
-use brz_metrics::Metric;
+use brz_metrics::{CounterMetric, MetricType, TimingMetric};
+#[cfg(feature = "metrics")]
+use std::sync::Arc;
 
 use crate::StatusCode;
 
-/// Fixed metric handles generated for an exported route template.
-#[derive(Clone, Copy, Debug)]
+/// Cumulative route metrics with a lazily populated exact-status cache.
+#[derive(Clone, Debug)]
 pub struct ApiMetrics {
     #[cfg(feature = "metrics")]
-    statuses: [Metric; 4],
+    requests: TimingMetric,
     #[cfg(feature = "metrics")]
-    timeout: Metric,
+    responses: Arc<ResponseMetrics>,
+    #[cfg(feature = "metrics")]
+    timeout: CounterMetric,
+}
+
+// A sparse two-level cache keeps the request path lock-free after first use,
+// without allocating 500 full OnceLock<CounterMetric> entries for every route.
+#[cfg(feature = "metrics")]
+#[derive(Debug)]
+struct ResponseMetrics {
+    name: &'static str,
+    groups: [OnceLock<Box<[OnceLock<CounterMetric>; 10]>>; 50],
+}
+
+#[cfg(feature = "metrics")]
+impl ResponseMetrics {
+    fn record(&self, status: u16) {
+        // Status sanitization happens before Observation::record, but retain a
+        // bounded guard for callers and future changes to response normalization.
+        if !(100..=599).contains(&status) {
+            return;
+        }
+        let index = usize::from(status - 100);
+        let group = self.groups[index / 10]
+            .get_or_init(|| Box::new(std::array::from_fn(|_| OnceLock::new())));
+        let metric = group[index % 10]
+            .get_or_init(|| CounterMetric::new(MetricType::Api(status), self.name));
+        metric.inc();
+    }
 }
 
 impl ApiMetrics {
-    /// Register status-class and timeout metrics under one route template.
+    /// Register all requests under one route template.
+    ///
+    /// Responses below 400 are successful; 4xx, 5xx, and timeouts are errors.
     #[must_use]
     pub fn new(name: &'static str) -> Self {
         #[cfg(not(feature = "metrics"))]
         let _ = name;
         Self {
             #[cfg(feature = "metrics")]
-            statuses: [
-                Metric::api(name),
-                Metric::api_3xx(name),
-                Metric::api_4xx(name),
-                Metric::api_5xx(name),
-            ],
+            requests: TimingMetric::new(MetricType::ApiAll, name),
             #[cfg(feature = "metrics")]
-            timeout: Metric::api_timeout(name),
+            responses: Arc::new(ResponseMetrics {
+                name,
+                groups: std::array::from_fn(|_| OnceLock::new()),
+            }),
+            #[cfg(feature = "metrics")]
+            timeout: CounterMetric::new(MetricType::ApiTimeout, name),
         }
     }
 
     #[cfg(feature = "metrics")]
-    fn record(self, status: StatusCode, elapsed: Duration) {
-        let class = status.as_u16() / 100;
-        if (2..=5).contains(&class) {
-            self.statuses[usize::from(class - 2)].record(elapsed, class < 4);
-        }
+    fn record(&self, status: StatusCode, elapsed: Duration) {
+        self.requests.record(elapsed, status.as_u16() < 400);
+        self.responses.record(status.as_u16());
     }
 
     #[cfg(not(feature = "metrics"))]
-    fn record(self, _status: StatusCode, _elapsed: Duration) {
-        let _ = self;
-    }
+    fn record(&self, _status: StatusCode, _elapsed: Duration) {}
 
     #[cfg(feature = "metrics")]
-    fn record_timeout(self, elapsed: Duration) {
-        self.timeout.record(elapsed, false);
+    fn record_timeout(&self, elapsed: Duration) {
+        self.requests.record(elapsed, false);
+        self.timeout.inc();
     }
 
     #[cfg(not(feature = "metrics"))]
-    fn record_timeout(self, _elapsed: Duration) {
-        let _ = self;
-    }
+    fn record_timeout(&self, _elapsed: Duration) {}
 }
 
 #[cfg(any(feature = "api-log", feature = "slow-log"))]
@@ -191,9 +218,11 @@ impl Observation {
         #[cfg(not(feature = "slow-log"))]
         let _ = body;
         let elapsed = self.started.elapsed();
-        if let Some(metrics) = self.metrics {
+        if let Some(metrics) = &self.metrics {
             if timed_out {
                 metrics.record_timeout(elapsed);
+                #[cfg(feature = "metrics")]
+                metrics.responses.record(status.as_u16());
             } else {
                 metrics.record(status, elapsed);
             }

@@ -228,7 +228,7 @@ fn expand_adapter(
                     metrics: || {
                         static METRICS: ::std::sync::LazyLock<#server::ApiMetrics> =
                             ::std::sync::LazyLock::new(|| #server::ApiMetrics::new(#path));
-                        *METRICS
+                        METRICS.clone()
                     },
                     program: None,
                 }
@@ -248,7 +248,7 @@ fn expand_adapter(
             if #server::__private::match_route(path, #path).is_some() {
                 static METRICS: ::std::sync::LazyLock<#server::ApiMetrics> =
                     ::std::sync::LazyLock::new(|| #server::ApiMetrics::new(#path));
-                let candidate = (#priority, *METRICS);
+                let candidate = (#priority, METRICS.clone());
                 if [#(#methods),*].contains(&method) { return Some(candidate); }
                 if fallback.is_none() { fallback = Some(candidate); }
             }
