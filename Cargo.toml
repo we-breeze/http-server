@@ -1,6 +1,6 @@
 [package]
 name = "brz-http-server"
-version = "0.0.30"
+version = "0.0.31"
 edition = "2024"
 rust-version = "1.85"
 description = "Zero-copy HTTP/1.1 server runtime for Breeze services"
@@ -13,7 +13,7 @@ resolver = "3"
 
 [dependencies]
 brz-http-cors = "=0.0.5"
-brz-metrics = { package = "brz-metrics", version = "=0.0.10", optional = true }
+brz-metrics = { package = "brz-metrics", version = "=0.0.11", optional = true }
 brz-io = { package = "brz-io", version = "0.0.7" }
 brz-json = { package = "brz-json", version = "0.0.10" }
 brz-ds = { package = "brz-ds", version = "0.0.6", default-features = false }
