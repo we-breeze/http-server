@@ -49,7 +49,7 @@ spanning segments uses a temporary bounded header copy, released before the
 next read, rather than retaining every growing prefix.
 
 Dependencies use crates.io releases; the optional metrics dependency is pinned
-to `brz-metrics =0.0.9` so one registry is shared with other Breeze SDKs.
+to `brz-metrics =0.0.10` so one registry is shared with other Breeze SDKs.
 
 ## Transport scope
 
