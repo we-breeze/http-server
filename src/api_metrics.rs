@@ -221,8 +221,6 @@ impl Observation {
         if let Some(metrics) = &self.metrics {
             if timed_out {
                 metrics.record_timeout(elapsed);
-                #[cfg(feature = "metrics")]
-                metrics.responses.record(status.as_u16());
             } else {
                 metrics.record(status, elapsed);
             }
@@ -281,3 +279,17 @@ impl std::fmt::Display for OptionalLength {
 
 #[cfg(all(test, any(feature = "api-log", feature = "slow-log")))]
 mod tests;
+
+#[cfg(all(test, feature = "metrics"))]
+mod metric_tests {
+    use super::*;
+    #[test]
+    fn a_short_timeout_is_an_error_without_becoming_slow() {
+        let metrics = ApiMetrics::new("/short-timeout-unit-test");
+        metrics.record_timeout(Duration::from_millis(50));
+        let snapshot = metrics.requests.snapshot();
+        assert_eq!((snapshot.total, snapshot.failure, snapshot.slow), (1, 1, 0));
+        assert_eq!(snapshot.elapsed_us, snapshot.failure_elapsed_us);
+        assert_eq!(metrics.timeout.get(), 1);
+    }
+}

@@ -26,9 +26,9 @@ dependencies = [
 
 [[package]]
 name = "brz-ds"
-version = "0.0.6"
+version = "0.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "135a908678abcb3cf88880b3345de017aafbac19fa887382281934f7a7d22de9"
+checksum = "35d3c5e94c046c4d6e243fc1819b7cbbeacee1ff8cd070cca0d52ab494e8bb4b"
 dependencies = [
  "crossbeam-utils",
  "mimalloc",
@@ -37,18 +37,18 @@ dependencies = [
 
 [[package]]
 name = "brz-http-cors"
-version = "0.0.5"
+version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc1ca57fa6362550dbbb3434e418c226e05bb983fd9b5e62e5d3a276f41e3ed2"
+checksum = "767d02caaa1ae4e2752ff643242d9f483ee262fec204ce0b4035d695a945ff08"
 dependencies = [
  "http",
 ]
 
 [[package]]
 name = "brz-http-router"
-version = "0.1.3"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92ff4c647af4c7f6bc2a488310bf2e585f846c2e2fc64ffa9335ded257482ac8"
+checksum = "7f90e223e513f83cc61dd6f41832e7ff5c0e595e5ac4216090b0557ad40b3d90"
 dependencies = [
  "http",
  "percent-encoding",
@@ -57,7 +57,7 @@ dependencies = [
 
 [[package]]
 name = "brz-http-server"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "brz-ds",
  "brz-http-cors",
@@ -85,7 +85,7 @@ dependencies = [
 
 [[package]]
 name = "brz-http-server-macros"
-version = "0.0.30"
+version = "0.0.31"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -95,9 +95,9 @@ dependencies = [
 
 [[package]]
 name = "brz-io"
-version = "0.0.7"
+version = "0.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63c28f8ffe722836e76c362df2c1a32ac57c1c0169482d3cd81095c9378d00d5"
+checksum = "e49224e97f9e3095892330a671af79b2210eaf705a091873f381dfbef2f2c0a9"
 dependencies = [
  "brz-ds",
  "elsa",
@@ -106,9 +106,9 @@ dependencies = [
 
 [[package]]
 name = "brz-json"
-version = "0.0.10"
+version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a85fcafc60f79e8a81af5f3102fdb4c427d28fc81fd7efe3c495113be4e0bf9"
+checksum = "f08c252822a656f62ceb8e730eafb15ea76d2cac1e4dbae163c33614806e7612"
 dependencies = [
  "brz-io",
  "brz-json-macros",
@@ -119,9 +119,9 @@ dependencies = [
 
 [[package]]
 name = "brz-json-macros"
-version = "0.0.10"
+version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4759f7fa793220b75c56edf4ea46cd303275e3e7cf80554b9c5af5e29af8aea"
+checksum = "67c33161a31f0c95295c2cef023172ce49dc93c1561cbda3aeddffdb797367b5"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -131,9 +131,9 @@ dependencies = [
 
 [[package]]
 name = "brz-metrics"
-version = "0.0.11"
+version = "0.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82d857b3b02cc98ee7f12659a4596f4b46f0f72abb2f748b156b8f1a1d763f5f"
+checksum = "2387b92c4ba623df7283bff20bcf0b8e2b4242683ab820fb5af6b39994f39125"
 dependencies = [
  "ahash",
  "arc-swap",

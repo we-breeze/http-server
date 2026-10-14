@@ -334,19 +334,25 @@ use the service policy (200 ms), including slow errors. Each route exposes six c
 counters through the new metrics reader: counts and duration sums for all,
 failed, and slow requests.
 
-Actual HTTP response codes are preserved in a separate count-only metric:
+HTTP response counts are included in `brz_req_total` with an exact status label:
 
 ```text
-brz_api_resp_total{type="API",name="/users/:id",status_code="503"} 12
+brz_req_total{type="API",name="/users/:id",status_code="503"} 12
+brz_req_total{type="API",name="/users/:id",status_code="timeout"} 1
 ```
 
+The API's unlabeled request-total sample is suppressed. Sum status labels to
+obtain the overall request rate; error/slow counts and duration sums remain
+route-level totals. `brz_api_resp_total` and `brz_api_timeout_total` are removed.
+Server timeouts count once as `timeout`, including when a 408 is generated;
+normal business responses of 408/504 retain their numeric status. A timeout
+always counts as an error and counts as slow only at or above 200 ms.
+
 There is no status-class label or `API5XX` type. Code-specific handles are created
-only when that code is first observed; later observations use a sparse `OnceLock`
-cache without registration locks. Each observed code adds one time series, rather
-than six. `brz_api_timeout_total` separately counts timeouts. A timeout response
-also increments its actual status-code counter (for example 408), while the overall
-request and error counts are incremented only once. `ApiMetrics` is now `Clone` rather
-than `Copy`, sharing its status cache between observations.
+only when that code is first observed; later observations use the existing sparse
+`OnceLock` cache without registration locks. This export change adds no allocation
+to request recording. Each observed code adds one series rather than six.
+`ApiMetrics` is `Clone` rather than `Copy`, sharing its status cache between observations.
 
 Different IDs and query strings share the template's slot; methods on the same
 template and repeated server registrations also share it. There is no per-request

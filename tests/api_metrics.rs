@@ -102,6 +102,7 @@ async fn exported_routes_count_all_statuses_and_timeouts_once() {
         );
     }
     assert_eq!(send(address, "POST", "/metric-test/201").await, 201);
+    assert_eq!(send(address, "GET", "/metric-test/408").await, 408);
     assert_eq!(send(address, "GET", "/metric-test/not-a-number").await, 400);
     assert_eq!(send(address, "DELETE", "/metric-test/200").await, 405);
     assert_eq!(send(address, "GET", "/metric-test/600").await, 500);
@@ -115,9 +116,9 @@ async fn exported_routes_count_all_statuses_and_timeouts_once() {
     let metrics = snapshots();
     assert_eq!(metrics.len(), paths.len());
     let value = metrics["API /metric-test/:code"];
-    assert_eq!(value.total, 14);
+    assert_eq!(value.total, 15);
     assert_eq!(value.success, 7);
-    assert_eq!(value.failure, 7);
+    assert_eq!(value.failure, 8);
     for route in ["secure", "slow", "invalid-json"] {
         let value = metrics[&format!("API /metric-test/{route}")];
         assert_eq!(value.total, 1, "{route}");
@@ -145,20 +146,33 @@ async fn exported_routes_count_all_statuses_and_timeouts_once() {
         (399, 1),
         (400, 2),
         (405, 1),
+        (408, 1),
         (499, 1),
         (500, 2),
         (599, 1),
     ] {
         let sample = format!(
-            "brz_api_resp_total{{type=\"API\",name=\"/metric-test/:code\",status_code=\"{code}\"}} {count}\n"
+            "brz_req_total{{type=\"API\",name=\"/metric-test/:code\",status_code=\"{code}\"}} {count}\n"
         );
         assert!(output.contains(&sample), "missing {sample}");
     }
     assert!(!output.contains("status_code=\"600\""));
     assert!(output.contains(
-        "brz_api_resp_total{type=\"API\",name=\"/metric-test/slow\",status_code=\"408\"} 1\n"
+        "brz_req_total{type=\"API\",name=\"/metric-test/slow\",status_code=\"timeout\"} 1\n"
     ));
-    assert!(output.contains("brz_api_timeout_total{type=\"API\",name=\"/metric-test/slow\"} 1\n"));
+    assert!(!output.contains("brz_api_timeout_total"));
+    assert!(!output.contains("brz_api_resp_total"));
+    assert!(!output.contains("brz_req_total{type=\"API\",name=\"/metric-test/slow\"}"));
+    assert!(
+        !output
+            .contains("brz_req_total{type=\"API\",name=\"/metric-test/slow\",status_code=\"408\"}")
+    );
+    let counted: u64 = output
+        .lines()
+        .filter(|line| line.starts_with("brz_req_total{type=\"API\",name=\"/metric-test/:code\","))
+        .map(|line| line.rsplit_once(' ').unwrap().1.parse::<u64>().unwrap())
+        .sum();
+    assert_eq!(counted, 15);
     assert!(!output.contains("status_code=\"203\""));
     let again = {
         let mut bytes = String::new();
