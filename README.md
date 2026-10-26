@@ -56,13 +56,28 @@ to `brz-metrics =0.0.10` so one registry is shared with other Breeze SDKs.
 HTTP/1.1 with bounded, fixed `Content-Length` bodies and sequential request
 handling per connection. Pipelined requests are supported in wire order.
 Finite download streams support automatic chunked response framing or a known
-`Content-Length`. Chunked request bodies, `Expect: 100-continue`, HTTP/2,
-SSE-specific behavior, and WebSockets remain outside this release.
+`Content-Length`. Chunked request bodies, `Expect: 100-continue`, HTTP/2 and
+SSE-specific behavior remain outside the native runtime contract.
 
-Protocol gateways that need transparent chunked uploads or HTTP upgrades should
-own that transport boundary in their integration crate and dispatch ordinary
-application requests into this server. Those proxy policies are intentionally
-not coupled to the Breeze runtime.
+`Upgrade::accept(&request, protocol, callback)` returns a validated HTTP 101
+handoff response. Add protocol-specific handshake headers to that response.
+After writing its head, the server transfers the owned stream and any unread
+bytes to the callback, releases HTTP receive storage, and stops parsing HTTP.
+The callback retains the connection permit and is cancelled by server shutdown;
+the short HTTP request timeout applies only to negotiation. Protocol framing,
+including the WebSocket key/version handshake and frames, belongs to the
+protocol implementation. Bare informational responses cannot finish requests.
+
+Enable `hyper` for the optional shared HTTP/1 transport. `hyper::serve` accepts
+ordinary Hyper protocol services and owns upgrade negotiation, connection
+limits and shutdown. `hyper::HandlerService` adapts native macro routers with
+their authenticator, buffered-body limits, CORS and HTTP handler timeout.
+`hyper::Mount` selects an exact configurable protocol path (optionally ending in
+`/`) before ordinary handlers; its `with_cors` applies one outer policy to both.
+Long polling and upgraded sessions bypass the ordinary handler timeout.
+Transparent streaming proxies and Socket.IO can use this shared runtime; the
+core server has no dependency on either protocol or Redis. The native listener
+and its existing request path stay available without enabling Hyper.
 
 ## HTTP filters
 

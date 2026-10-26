@@ -35,6 +35,10 @@ mod route;
 mod router;
 mod server;
 mod stream;
+mod upgrade;
+
+#[cfg(feature = "hyper")]
+pub mod hyper;
 
 #[doc(hidden)]
 pub use api_metrics::ApiMetrics;
@@ -58,6 +62,7 @@ pub use response::{HeaderBlock, HeaderBlockError, Response, ResponseBody, Status
 pub use router::Router;
 pub use server::{Handler, Server, ServerConfig};
 pub use stream::ResponseStream;
+pub use upgrade::{Upgrade, UpgradeError, Upgraded};
 
 #[cfg(feature = "macros")]
 pub use http_server_macros::{delete, get, handlers, head, options, patch, post, put, registry};

@@ -120,7 +120,10 @@ fn encode_response_head(
     let www_authenticate_len = response
         .www_authenticate_ref()
         .map_or(0, |value| b"WWW-Authenticate: ".len() + value.len() + 2);
-    let connection_len = if close {
+    let upgrade_protocol = response.upgrade_protocol();
+    let connection_len = if let Some(protocol) = upgrade_protocol {
+        b"Connection: Upgrade\r\nUpgrade: ".len() + protocol.len() + 2
+    } else if close {
         b"Connection: close\r\n".len()
     } else {
         0
@@ -178,7 +181,11 @@ fn encode_response_head(
     if chunked {
         output.extend_from_slice(b"Transfer-Encoding: chunked\r\n");
     }
-    if close {
+    if let Some(protocol) = upgrade_protocol {
+        output.extend_from_slice(b"Connection: Upgrade\r\nUpgrade: ");
+        output.extend_from_slice(protocol.as_bytes());
+        output.extend_from_slice(b"\r\n");
+    } else if close {
         output.extend_from_slice(b"Connection: close\r\n");
     }
     output.extend_from_slice(b"\r\n");

@@ -109,6 +109,7 @@ pub struct Response {
     suppress_body: bool,
     conversion_failed: bool,
     cors_policy: crate::ResponseCors,
+    pub(crate) upgrade: Option<crate::Upgrade>,
 }
 
 impl Response {
@@ -125,6 +126,7 @@ impl Response {
             suppress_body: false,
             conversion_failed: false,
             cors_policy: crate::ResponseCors::Apply,
+            upgrade: None,
         }
     }
 
@@ -365,6 +367,10 @@ impl Response {
 
     pub(crate) fn www_authenticate_ref(&self) -> Option<&'static str> {
         self.www_authenticate
+    }
+
+    pub(crate) fn upgrade_protocol(&self) -> Option<&str> {
+        self.upgrade.as_ref().map(crate::Upgrade::protocol)
     }
 
     pub(crate) fn should_close(&self) -> bool {

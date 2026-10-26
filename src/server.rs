@@ -173,7 +173,7 @@ impl ServerConfig {
         }
     }
 
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         if self.initial_request_segment_bytes == 0 {
             return Err(Error::InvalidConfig(
                 "initial_request_segment_bytes must be greater than zero",
@@ -457,7 +457,7 @@ where
             ),
         )
         .await;
-        let (response, consumed, request_keep_alive) = match result {
+        let (mut response, consumed, request_keep_alive) = match result {
             Ok(Ok(result)) => result,
             Ok(Err(RequestFailure::Closed)) => {
                 read_buffer.clear();
@@ -511,6 +511,47 @@ where
             false,
             read_buffer,
         );
+        // An informational response cannot terminate an ordinary request. Only
+        // an explicit, validated handoff may finish with 101.
+        if response.status().is_informational()
+            && (response.status() != StatusCode::SWITCHING_PROTOCOLS || response.upgrade.is_none())
+        {
+            response = Response::empty(StatusCode::INTERNAL_SERVER_ERROR).close();
+        }
+        if response.upgrade.is_some()
+            && (response.status() != StatusCode::SWITCHING_PROTOCOLS
+                || response.should_close()
+                || !request_keep_alive)
+        {
+            response = Response::empty(StatusCode::INTERNAL_SERVER_ERROR).close();
+        }
+        if response.upgrade.is_some() {
+            std::io::BufRead::consume(read_buffer, consumed);
+            // Copy only unread protocol bytes; release HTTP arena storage and
+            // the request-body budget before entering a long-lived session.
+            let buffered = bytes::Bytes::copy_from_slice(read_buffer.view().as_slice());
+            read_buffer.clear();
+            context.release_budget();
+            let protocol = response
+                .upgrade
+                .as_ref()
+                .expect("checked")
+                .protocol()
+                .to_owned();
+            let upgrade = response.upgrade.take().expect("checked");
+            // Keep the protocol metadata while encoding the HTTP head.
+            response.upgrade = Some(crate::Upgrade::metadata(protocol));
+            write_response(
+                &mut stream,
+                &config.arena,
+                response,
+                false,
+                config.request_timeout,
+            )
+            .await?;
+            drop(state);
+            return upgrade.run(crate::Upgraded::new(stream, buffered)).await;
+        }
         let close = !request_keep_alive || response.should_close();
         // Request/derived storage and its Body budget must not pin the arena for
         // a slow download. Only pipelined unread bytes survive this boundary.
